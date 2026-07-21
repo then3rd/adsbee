@@ -118,10 +118,10 @@ Rule 2 is checked automatically by `scripts/check_version_sync.sh`:
   ```
   bash firmware/scripts/setup_dev.sh
   ```
-  - `pre-commit` — runs the version-sync check (fast). Bypass with `git commit --no-verify`.
+  - `pre-commit` — runs the version-sync check (fast, no toolchain). Bypass with `git commit --no-verify`.
   - `pre-push` — runs the host unit tests (`build.sh test`), mirroring the CI `host_build_and_test`
-    job so broken tests are caught before they leave your machine. Requires Docker (blocks the push
-    if unavailable). Bypass with `git push --no-verify`.
+    job. Skips with a warning if Docker isn't available (never blocks the push). Bypass with
+    `git push --no-verify`.
 
 ---
 
