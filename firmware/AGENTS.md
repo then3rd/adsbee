@@ -114,11 +114,14 @@ static constexpr uint32_t kSettingsVersion = N;
 Rule 2 is checked automatically by `scripts/check_version_sync.sh`:
 - **CI** (`version_sync_check` job) fails a PR that bumps `kSettingsVersion` without bumping the firmware version. This is the hard gate.
 - **`build.sh`** runs the same check locally before every build.
-- **Local git hook** — catch it before you even commit. A native `pre-commit` hook (no external tooling) is installed by the dev setup script:
+- **Local git hooks** — installed by the dev setup script (native hooks, no external tooling):
   ```
   bash firmware/scripts/setup_dev.sh
   ```
-  (bypass a single commit with `git commit --no-verify`)
+  - `pre-commit` — runs the version-sync check (fast). Bypass with `git commit --no-verify`.
+  - `pre-push` — runs the host unit tests (`build.sh test`), mirroring the CI `host_build_and_test`
+    job so broken tests are caught before they leave your machine. Requires Docker (blocks the push
+    if unavailable). Bypass with `git push --no-verify`.
 
 ---
 
