@@ -53,3 +53,35 @@ The ADSBee m1090 is a solder-down module containing only the 1090MHz frontend an
 For industrial and outdoor applications, the ADSBee 1090U is available as the GS3M PoE, a ruggedized weatherproof device connected and powered by 802.3af Power over Ethernet.
 
 [![ADSBee GS3M PoE Picture](images/adsbee_gs3m_poe_pic.png)](https://pantsforbirds.com/product/adsbee-gs3m-poe/)
+
+## Development
+
+This repo uses [`just`](https://github.com/casey/just) as a one-stop task runner for
+building, flashing, debugging, and monitoring the device.
+
+### Setup (one-time)
+
+```bash
+bash SETUP.sh
+```
+
+`SETUP.sh` installs `just`, Docker (the firmware builds in containers), and Python,
+configures shell completions, and initializes git submodules + hooks.
+Supported platforms: Ubuntu/Debian, Arch Linux, and macOS (Homebrew).
+
+### Common tasks
+
+```bash
+just              # show the full menu of commands
+just build        # build all firmware (ESP32 + CC1312 + RP2040) -> combined.uf2
+just test         # run host unit tests (no hardware needed)
+just flash        # flash combined.uf2 over USB (BOOTSEL)
+just console      # open a serial console to the USB AT interface
+```
+
+Host unit tests run automatically on `git push` (skipped if Docker is unavailable;
+bypass with `git push --no-verify`) and in CI on pushes/PRs to `main`.
+
+Run `just` (or `just help`) for the full grouped menu — Setup, Build, Test,
+Flash / Install, Debug, Monitor, and Info. Prefix build/test commands with
+`debug=true` for a debug build (e.g. `debug=true just build`).
