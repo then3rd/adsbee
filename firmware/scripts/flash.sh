@@ -3,8 +3,8 @@
 # Invoked by `just flash` with PY/PORT/CI_DIR exported as env vars; $1 = image path.
 set -uo pipefail   # no -e: the RP2040 disconnects mid-copy, which is expected
 
-img="$1"
-[ -f "$img" ] || { echo "✗ UF2 not found: $img — run 'just build' first."; exit 1; }
+img="${1:-}"
+[ -n "$img" ] && [ -f "$img" ] || { echo "✗ UF2 not found: ${img:-<none>} — run 'just build' first."; exit 1; }
 
 # RPI-RP2 as a block device = board is in BOOTSEL; as a dir = already mounted.
 rp2_dev() { lsblk -rno NAME,LABEL 2>/dev/null | awk '$2=="RPI-RP2"{print "/dev/"$1; exit}'; }
@@ -33,7 +33,19 @@ for _ in $(seq 1 30); do
 done
 [ -n "$mnt" ] || { echo "✗ RPI-RP2 not found/mountable. Put the board in BOOTSEL and retry."; exit 1; }
 
-# 3. Copy the image (a write/sync error as the device reboots is normal).
+# 3. Copy the image. A late write/sync error as the device reboots mid-copy is
+# normal and not fatal, but an upfront failure (e.g. read-only automount) is —
+# check cp's own exit status before declaring success.
 echo "→ Copying $(basename "$img") → $mnt"
-cp "$img" "$mnt/" 2>/dev/null; sync 2>/dev/null || true
-echo "✓ Flashed — device reboots automatically (reflashes ESP32/CC1312 if versions differ)."
+if cp "$img" "$mnt/" 2>/dev/null; then
+    sync 2>/dev/null || true
+    echo "✓ Flashed — device reboots automatically (reflashes ESP32/CC1312 if versions differ)."
+else
+    rc=$?
+    if [ -e "$mnt" ]; then
+        echo "✗ Copy to $mnt failed (exit $rc) — is the drive read-only or did the device disconnect early?"
+        exit 1
+    fi
+    # mnt disappeared mid-copy: the device rebooted right as the copy finished, which is expected.
+    echo "✓ Flashed — device reboots automatically (reflashes ESP32/CC1312 if versions differ)."
+fi
