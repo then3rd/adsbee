@@ -27,8 +27,10 @@ OTA := FW_DIR / "pico/build" / _btype / "application/adsbee_1090.ota"
 
 # ─── Device targets — override via env ────────────────────────────────────────
 #   ADSBEE_HOST=192.168.1.50 just health      ADSBEE_PORT=/dev/ttyACM1 just console
+# PORT auto-detects the RP2040 by USB VID:PID (2e8a:000a) via detect_adsbee_port.sh,
+# since its /dev/ttyACM* index shifts depending on what else is plugged in.
 HOST := env("ADSBEE_HOST", "adsbee1090.local")
-PORT := env("ADSBEE_PORT", "/dev/ttyACM0")
+PORT := env("ADSBEE_PORT", shell("bash " + SCRIPTS + "/detect_adsbee_port.sh"))
 BAUD := env("ADSBEE_BAUD", "115200")
 
 ###@ ADSBee 1090 — build · flash · debug · monitor
@@ -178,17 +180,49 @@ gdb-cc1312:
 console: _ensure-udev
     {{ PY }} -m serial.tools.miniterm {{ PORT }} {{ BAUD }}
 
+# Send AT+HELP and check for a reply — auto-verifiable stand-in for `console`.
+console-auto: _ensure-udev
+    {{ PY }} "{{ CI_DIR }}/at_probe.py" --port {{ PORT }} --baud {{ BAUD }}
+
 # Timestamped multi-port serial logger (serial_logger; uses poetry if present, else python3 + pyserial)
 monitor: _ensure-udev
     #!/usr/bin/env bash
     set -uo pipefail
+    # PY may be a repo-root-relative path (.venv/bin/python3) — resolve it to an
+    # absolute path before cd'ing into serial_logger, or it silently breaks.
+    py_abs="{{ PY }}"
+    [[ "$py_abs" = /* ]] || py_abs="{{ justfile_directory() }}/{{ PY }}"
     cd {{ SCRIPTS }}/serial_logger
     if command -v poetry >/dev/null 2>&1; then
         poetry run serial-logger -p {{ PORT }}:{{ BAUD }}:RP2040 -o session.log
     else
         echo "→ poetry not found — running serial_logger.py directly (needs pyserial)." >&2
-        {{ PY }} serial_logger.py -p {{ PORT }}:{{ BAUD }}:RP2040 -o session.log
+        "$py_abs" serial_logger.py -p {{ PORT }}:{{ BAUD }}:RP2040 -o session.log
     fi
+
+# Log for a few seconds and check timestamped lines actually streamed — auto-verifiable stand-in for `monitor`.
+monitor-auto: _ensure-udev
+    #!/usr/bin/env bash
+    set -uo pipefail
+    py_abs="{{ PY }}"
+    [[ "$py_abs" = /* ]] || py_abs="{{ justfile_directory() }}/{{ PY }}"
+    log=$(mktemp)
+    trap 'rm -f "$log"' EXIT
+    # -o writes plain "[HH:MM:SS.mmm] [LABEL] line" text with no ANSI color codes,
+    # unlike stdout — much easier to grep reliably.
+    "$py_abs" {{ SCRIPTS }}/serial_logger/serial_logger.py \
+        -p {{ PORT }}:{{ BAUD }}:RP2040 -o "$log" >/dev/null 2>&1 &
+    logger_pid=$!
+    sleep 1
+    # The device may be idle/silent (no RF traffic, LOG_LEVEL=SILENT) — don't rely
+    # on ambient output, provoke a guaranteed line by asking a question over a
+    # second, non-exclusive open of the same port (harmless while the logger reads).
+    "$py_abs" -c "import serial; s = serial.Serial('{{ PORT }}', {{ BAUD }}, timeout=1); s.write(b'AT+HELP\r\n'); s.close()" || true
+    sleep 2
+    kill -INT "$logger_pid" 2>/dev/null
+    wait "$logger_pid" 2>/dev/null
+    cat "$log"
+    grep -qE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\] \[' "$log"
 
 # Live multi-receiver metrics GUI (needs python websockets + tkinter)
 receiver-monitor:
@@ -303,9 +337,22 @@ self-test MODE="expand":
                 case "$verify" in
                     # Eyeball-only targets block forever — bound them so the run can't hang.
                     ask:*) echo "    (auto-closes after 10s — or quit early: Ctrl-] console, Ctrl-C others)"
-                           # timeout kills the recipe with SIGTERM (rc 143) — expected, so hide just's
-                           # "terminated by signal 15" complaint; the human answers the ask:* prompt anyway.
-                           timeout 10 just "$@" 2> >(grep -v 'terminated on line .* by signal 15' >&2); rc=$? ;;
+                           # `timeout` only signals its direct child (just), which never forwards
+                           # it down through the recipe shell to the actual serial tool — miniterm
+                           # survives and leaves the tty stuck in raw mode. Run in our own process
+                           # group instead so the watchdog can hit every descendant at once, with a
+                           # SIGINT first (lets miniterm restore the terminal itself) escalating to
+                           # SIGKILL, then always force the tty back to sane afterward.
+                           # Bash redirects a backgrounded job's stdin to /dev/null, which breaks
+                           # miniterm's termios calls — reopen the real tty device explicitly.
+                           tty_dev=$(tty 2>/dev/null) || tty_dev=/dev/tty
+                           setsid just "$@" < "$tty_dev" 2> >(grep -v 'terminated on line .* by signal' >&2) &
+                           jpid=$!
+                           ( sleep 10; kill -INT -- -"$jpid" 2>/dev/null; sleep 2; kill -KILL -- -"$jpid" 2>/dev/null ) &
+                           watchdog=$!
+                           wait "$jpid" 2>/dev/null; rc=$?
+                           kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+                           stty sane 2>/dev/null || true ;;
                     *)     just "$@"; rc=$? ;;
                 esac
                 case "$verify" in
@@ -325,8 +372,8 @@ self-test MODE="expand":
             hwstep "Flash firmware over USB"      "auto:2e8a:000a" flash
             hwstep "Poll device health over WiFi" "rc"            health
             # Eyeball-only (content / debugger attach / GUI) — quit each with Ctrl-C / close:
-            hwstep "Serial console (send an AT cmd, Ctrl-] to exit)" "ask:Did you see AT responses?"     console
-            hwstep "Serial logger (Ctrl-C to stop)"                  "ask:Did timestamped lines stream?" monitor
+            hwstep "Serial console (send AT+HELP, check for reply)" "rc"                                 console-auto
+            hwstep "Serial logger (check timestamped lines stream)"  "rc"                                 monitor-auto
             hwstep "J-Link GDB server — RP2040 core 0 (Ctrl-C)"      "ask:Connected target reported?"    gdb-rp2040
             hwstep "J-Link GDB server — RP2040 core 1 (Ctrl-C)"      "ask:Connected target reported?"    gdb-rp2040-core1
             hwstep "J-Link GDB server — CC1312 (Ctrl-C)"             "ask:Connected target reported?"    gdb-cc1312
