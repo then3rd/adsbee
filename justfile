@@ -8,15 +8,18 @@ set shell := ["bash", "-uc"]
 debug := "false"
 
 # ─── Derived from `debug` ─────────────────────────────────────────────────────
-_flag  := if debug == "true" { "-d" } else { "" }
+_flag := if debug == "true" { "-d" } else { "" }
 _btype := if debug == "true" { "Debug" } else { "Release" }
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
-FW_DIR  := "firmware/adsbee_1090"
+FW_DIR := "firmware/adsbee_1090"
 SCRIPTS := "firmware/scripts"
-CI_DIR  := "ci/test_usb_and_ota_flash"
-OD_CPP  := "firmware/common/coprocessor/object_dictionary.cpp"
-SET_HH  := "firmware/common/settings/settings.hh"
+CI_DIR := "ci/test_usb_and_ota_flash"
+OD_CPP := "firmware/common/coprocessor/object_dictionary.cpp"
+SET_HH := "firmware/common/settings/settings.hh"
+VENV := ".venv"
+# Use the project venv's Python once it exists (created by `just flash-deps`); fall back to system python3 otherwise.
+PY := if path_exists(VENV / "bin/python3") == "true" { VENV / "bin/python3" } else { "python3" }
 
 # Build outputs (RP2040 combined image embeds ESP32 + CC1312 binaries).
 UF2 := FW_DIR / "pico/build" / _btype / "application/combined.uf2"
@@ -35,16 +38,18 @@ default:
 
 ##@ Setup
 # Init git submodules + install version-sync pre-commit hook (run once)
-setup:
+setup: install-udev flash-deps
     bash {{ SCRIPTS }}/setup_dev.sh
 
 # Check the Settings/firmware version-sync rule (working tree vs HEAD)
 check-versions:
     {{ SCRIPTS }}/check_version_sync.sh HEAD WORKTREE
 
-# Install Python deps used by flash/health scripts (websockets)
+# Create/update the project venv and install Python deps used by flash/health/monitor scripts.
+# --system-site-packages lets it see system-installed pyserial/tkinter (see SETUP.sh) alongside pip-installed websockets.
 flash-deps:
-    python3 -m pip install -r {{ CI_DIR }}/requirements.txt
+    [ -d {{ VENV }} ] || python3 -m venv --system-site-packages {{ VENV }}
+    {{ VENV }}/bin/pip install -r {{ CI_DIR }}/requirements.txt
 
 # Install the udev rule for non-root USB serial access (flash/console), then reload
 install-udev:
@@ -104,7 +109,7 @@ test FILTER="":
 ##@ Flash / Install
 # Reboot the RP2040 into BOOTSEL (RPI-RP2) mode over USB serial
 bootsel: _ensure-udev
-    python3 {{ CI_DIR }}/reboot_to_bootloader.py --port {{ PORT }}
+    {{ PY }} {{ CI_DIR }}/reboot_to_bootloader.py --port {{ PORT }}
 
 # Flash combined.uf2 over USB (BOOTSEL → copy to RPI-RP2). No network needed.
 # Pass a path to flash a different image: `just flash path/to/combined.uf2`
@@ -123,7 +128,7 @@ flash IMG=UF2: _ensure-udev
         echo "→ Device already in BOOTSEL."
     else
         echo "→ Rebooting {{ PORT }} into BOOTSEL..."
-        python3 {{ CI_DIR }}/reboot_to_bootloader.py --port {{ PORT }} 2>/dev/null \
+        {{ PY }} {{ CI_DIR }}/reboot_to_bootloader.py --port {{ PORT }} 2>/dev/null \
             || echo "  (auto-reboot failed — hold BOOTSEL and replug USB)"
     fi
 
@@ -148,11 +153,11 @@ flash IMG=UF2: _ensure-udev
 
 # USB flash + WiFi health verify via the CI harness (needs `just flash-deps`)
 flash-verify: _ensure-udev
-    python3 {{ CI_DIR }}/test_ota.py --usb-only --uf2 {{ UF2 }} --host {{ HOST }}
+    {{ PY }} {{ CI_DIR }}/test_ota.py --usb-only --uf2 {{ UF2 }} --host {{ HOST }}
 
 # Over-the-air (OTA) firmware upload over WebSocket (device must be on WiFi)
 flash-ota:
-    python3 {{ CI_DIR }}/test_ota.py --ota-only --ota-fw {{ OTA }} --host {{ HOST }}
+    {{ PY }} {{ CI_DIR }}/test_ota.py --ota-only --ota-fw {{ OTA }} --host {{ HOST }}
 
 ##@ Debug
 #@ SEGGER J-Link GDB servers — attach your debugger to the printed port
@@ -171,7 +176,7 @@ gdb-cc1312:
 ##@ Monitor / Observe
 # Interactive serial console to the USB AT interface (Ctrl-] to exit)
 console: _ensure-udev
-    python3 -m serial.tools.miniterm {{ PORT }} {{ BAUD }}
+    {{ PY }} -m serial.tools.miniterm {{ PORT }} {{ BAUD }}
 
 # Timestamped multi-port serial logger (serial_logger; uses poetry if present, else python3 + pyserial)
 monitor: _ensure-udev
@@ -182,16 +187,16 @@ monitor: _ensure-udev
         poetry run serial-logger -p {{ PORT }}:{{ BAUD }}:RP2040 -o session.log
     else
         echo "→ poetry not found — running serial_logger.py directly (needs pyserial)." >&2
-        python3 serial_logger.py -p {{ PORT }}:{{ BAUD }}:RP2040 -o session.log
+        {{ PY }} serial_logger.py -p {{ PORT }}:{{ BAUD }}:RP2040 -o session.log
     fi
 
 # Live multi-receiver metrics GUI (needs python websockets + tkinter)
 receiver-monitor:
-    python3 {{ SCRIPTS }}/adsbee_monitor/adsbee_monitor.py
+    {{ PY }} {{ SCRIPTS }}/adsbee_monitor/adsbee_monitor.py
 
 # Poll device health over WiFi — ESP32 + RP2040 alive via /metrics
 health:
-    python3 {{ CI_DIR }}/check_device.py {{ HOST }}
+    {{ PY }} {{ CI_DIR }}/check_device.py {{ HOST }}
 
 ##@ Info
 # Print the firmware version from object_dictionary.cpp
@@ -210,7 +215,8 @@ version:
 #   expand   — parse, dry-run every recipe, check referenced paths (fast, no Docker)
 #   software — expand + actually run the no-hardware targets (needs Docker)
 #   hardware — software + device targets; auto-verified where observable (bootsel/flash via USB,
-#              health via exit code), prompts only for eyeball-only ones (console/gdb/gui)
+#   health via exit code), prompts only for eyeball-only ones (console/gdb/gui)
+#
 self-test MODE="expand":
     #!/usr/bin/env bash
     set -uo pipefail
