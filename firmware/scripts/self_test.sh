@@ -23,11 +23,13 @@ for r in $(just --summary); do
 done
 for f in "$FW_DIR/build.sh" \
          "$SCRIPTS/setup_dev.sh" "$SCRIPTS/check_version_sync.sh" \
+         "$SCRIPTS/detect_adsbee_port.sh" "$SCRIPTS/flash.sh" "$SCRIPTS/monitor_auto.sh" \
+         "$SCRIPTS/serial_logger/serial_logger.py" "$SCRIPTS/adsbee_monitor/adsbee_monitor.py" \
          "$SCRIPTS/jlink/open_rp2040_core0_jlink.bash" \
          "$SCRIPTS/jlink/open_rp2040_core1_jlink.bash" \
          "$SCRIPTS/jlink/open_cc1312r_jlink.bash" \
          "$SCRIPTS/udev/99-adsbee.rules" \
-         "$CI_DIR/reboot_to_bootloader.py" "$CI_DIR/test_ota.py" \
+         "$CI_DIR/reboot_to_bootloader.py" "$CI_DIR/test_ota.py" "$CI_DIR/at_probe.py" \
          "$CI_DIR/check_device.py" "$CI_DIR/requirements.txt" \
          "$OD_CPP" "$SET_HH"; do
     if [ -e "$f" ]; then echo "  ✓ path $f"; else echo "  ✗ MISSING: $f"; fail=1; fi
@@ -107,11 +109,15 @@ if [ "$mode" = hardware ]; then
                        wait "$jpid" 2>/dev/null; rc=$?
                        kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
                        stty sane 2>/dev/null || true ;;
-                *)     just "$@"; rc=$? ;;
+                # auto/rc recipes are expected to finish on their own (at_probe.py and
+                # monitor_auto.sh already have their own internal timeouts) — this is
+                # just a backstop so a stuck one can't hang the whole hardware run.
+                *)     timeout 60 just "$@"; rc=$? ;;
             esac
             case "$verify" in
                 auto:*)
-                    if _wait_usb "${verify#auto:}" 20; then ok=$((ok + 1)); echo "    ✓ $label (auto-verified: ${verify#auto:} enumerated)"
+                    if [ "$rc" -eq 0 ] && _wait_usb "${verify#auto:}" 20; then ok=$((ok + 1)); echo "    ✓ $label (exit 0, auto-verified: ${verify#auto:} enumerated)"
+                    elif [ "$rc" -ne 0 ]; then fail=1; echo "    ✗ $label (exit $rc)"
                     else fail=1; echo "    ✗ $label (auto-check failed: ${verify#auto:} never appeared)"; fi ;;
                 rc)
                     if [ "$rc" -eq 0 ]; then ok=$((ok + 1)); echo "    ✓ $label (exit 0)"

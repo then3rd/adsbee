@@ -19,4 +19,5 @@ for dev in /dev/ttyACM* /dev/ttyUSB*; do
     fi
 done
 
+echo "⚠ no device matched VID:PID $VID:$PID_APP — falling back to $FALLBACK (may be wrong/absent)." >&2
 echo "$FALLBACK"
