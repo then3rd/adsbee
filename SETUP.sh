@@ -8,7 +8,8 @@ set -euo pipefail
 #   • just    — the task runner itself
 #   • Docker  — build.sh compiles all three firmwares in containers
 #   • python3 — flash / console / health helper scripts
-# Then configures shell completions and runs `just setup`
+# Adds you to the serial group (dialout/uucp) for USB flash/console access,
+# then configures shell completions and runs `just setup`
 # (git submodules + version-sync pre-commit hook).
 #
 # Supports: Ubuntu/Debian, Arch Linux, macOS (Homebrew).
@@ -196,6 +197,45 @@ install_python_arch() {
     fi
 }
 
+# ─── Serial port access (flash / console over USB) ───────────────────────────
+# The USB serial device (/dev/ttyACM*) is owned by a group that varies by distro:
+# 'dialout' on Debian/Ubuntu, 'uucp' on Arch. macOS needs no group.
+setup_serial_access() {
+    local grp
+    case "$1" in
+        debian) grp="dialout" ;;
+        arch)   grp="uucp" ;;
+        *)      return ;;   # macOS
+    esac
+    if ! getent group "$grp" &>/dev/null; then
+        warn "Group '$grp' not found — plug in the device and run 'ls -l /dev/ttyACM*' to find its group, then add yourself to it."
+        return
+    fi
+    if id -nG "$USER" | grep -qw "$grp"; then
+        info "Serial access: $USER already in '$grp'."
+    else
+        info "Adding $USER to the '$grp' group for USB serial access…"
+        sudo usermod -aG "$grp" "$USER"
+        warn "Group change takes effect in a new shell session (or run: newgrp $grp)."
+    fi
+}
+
+# Install the udev rule for non-root serial access. This is the reliable fix on
+# systemd distros where the RP2040 port is root-owned and no group helps.
+install_udev_rule() {
+    [ "$1" = "macos" ] && return
+    local src="$SCRIPT_DIR/firmware/scripts/udev/99-adsbee.rules"
+    [ -f "$src" ] || { warn "udev rule not found at $src — skipping."; return; }
+    if ! command -v udevadm &>/dev/null; then
+        warn "udevadm not found — skipping udev rule install."
+        return
+    fi
+    info "Installing udev rule for non-root USB serial access…"
+    sudo cp "$src" /etc/udev/rules.d/99-adsbee.rules
+    sudo udevadm control --reload-rules && sudo udevadm trigger || true
+    info "udev rule installed — replug the device to apply (no logout needed)."
+}
+
 # ─── Shell completions ────────────────────────────────────────────────────────
 setup_completions() {
     local shell_name
@@ -246,6 +286,10 @@ main() {
 
     # 3. python3 (helper scripts)
     "install_python_${os}"
+
+    # 3b. Serial port access for flash / console over USB
+    setup_serial_access "$os"
+    install_udev_rule "$os"
 
     # 4. Shell completions
     if command -v just &>/dev/null; then
