@@ -44,7 +44,20 @@ def reboot_via_serial(port: str) -> None:
     except FileNotFoundError:
         raise RuntimeError(f"Serial port {port} not found. Is the device connected?")
     except PermissionError:
-        raise RuntimeError(f"Permission denied on {port}. Add user to 'dialout' group: sudo usermod -aG dialout $USER")
+        # Report the port's actual owning group; if it's root-owned (common on
+        # Arch, where no group grants access) point at the udev rule instead.
+        try:
+            import grp, os
+            group = grp.getgrgid(os.stat(port).st_gid).gr_name
+        except Exception:
+            group = None
+        if group and group != "root":
+            hint = (f"add your user to the '{group}' group and re-login: "
+                    f"sudo usermod -aG {group} $USER")
+        else:
+            hint = ("install the udev rule for non-root access: `just install-udev` "
+                    "(firmware/scripts/udev/99-adsbee.rules), then replug the device")
+        raise RuntimeError(f"Permission denied on {port}. Fix: {hint}")
 
 
 def main() -> None:

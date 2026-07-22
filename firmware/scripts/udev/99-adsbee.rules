@@ -1,0 +1,22 @@
+# ADSBee 1090 — USB serial access
+#
+# Lets the `just flash` / `just console` helpers open the RP2040 serial port
+# without root. On many systemd distros (Arch especially) the RP2040 CDC comes
+# up owned by root with no group anyone is in, so `sudo usermod -aG ...` never
+# helps — this rule is the actual fix.
+#
+# Raspberry Pi RP2040 vendor ID 0x2e8a covers both modes:
+#   2e8a:000a  running application (CDC ACM → /dev/ttyACM*)
+#   2e8a:0003  BOOTSEL (mass-storage / PICOBOOT)
+#
+# TAG+="uaccess" is the primary mechanism: systemd-logind grants the active
+# seat's user an ACL on the device, regardless of group. GROUP/MODE are a
+# fallback for non-systemd or remote (SSH) sessions — on Debian/Ubuntu change
+# "uucp" to "dialout".
+#
+# Install:  just install-udev
+#   (equivalently: sudo cp 99-adsbee.rules /etc/udev/rules.d/ &&
+#                  sudo udevadm control --reload && sudo udevadm trigger)
+
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="2e8a", GROUP="uucp", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e8a", GROUP="uucp", MODE="0660", TAG+="uaccess"
