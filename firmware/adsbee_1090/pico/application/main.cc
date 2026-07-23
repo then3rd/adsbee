@@ -141,12 +141,14 @@ int main() {
                 CONSOLE_ERROR("main", "Unable to read firmware version from ESP32.");
             } else if (esp32_firmware_version != object_dictionary.kFirmwareVersion) {
                 // ESP32 firmware version doesn't match ours. Flash the ESP32.
-                CONSOLE_ERROR("main",
-                              "Incorrect firmware version detected on ESP32. Pico is running %d.%d.%d but ESP32 is "
-                              "running %d.%d.%d",
-                              object_dictionary.kFirmwareVersionMajor, object_dictionary.kFirmwareVersionMinor,
-                              object_dictionary.kFirmwareVersionPatch, esp32_firmware_version >> 16,
-                              (esp32_firmware_version >> 8) & 0xFF, esp32_firmware_version & 0xFF);
+                CONSOLE_ERROR(
+                    "main",
+                    "Incorrect firmware version detected on ESP32. Pico is running %d.%d.%d-rc%d but ESP32 is "
+                    "running %d.%d.%d-rc%d",
+                    object_dictionary.kFirmwareVersionMajor, object_dictionary.kFirmwareVersionMinor,
+                    object_dictionary.kFirmwareVersionPatch, object_dictionary.kFirmwareVersionReleaseCandidate,
+                    (esp32_firmware_version >> 24) & 0xFF, (esp32_firmware_version >> 16) & 0xFF,
+                    (esp32_firmware_version >> 8) & 0xFF, esp32_firmware_version & 0xFF);
                 break;
             } else {
                 // Firmware checks out, all good! Don't flash the ESP32.
