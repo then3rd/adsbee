@@ -23,6 +23,46 @@ static const char* kTag = "Display";
 Display display = Display();
 
 namespace {
+// Map an ADS-B emitter category to a compact 3-letter abbreviation for the radar tag. Returns
+// "" for categories with no useful label (unknown/reserved), which hides the tag line.
+const char* EmitterCategoryAbbrev(ADSBTypes::EmitterCategory cat) {
+    switch (cat) {
+        case ADSBTypes::kEmitterCategoryLight:
+            return "LGT";
+        case ADSBTypes::kEmitterCategoryMedium1:
+        case ADSBTypes::kEmitterCategoryMedium2:
+            return "MED";
+        case ADSBTypes::kEmitterCategoryHighVortexAircraft:
+        case ADSBTypes::kEmitterCategoryHeavy:
+            return "HVY";
+        case ADSBTypes::kEmitterCategoryHighPerformance:
+            return "HPF";
+        case ADSBTypes::kEmitterCategoryRotorcraft:
+            return "ROT";
+        case ADSBTypes::kEmitterCategoryGliderSailplane:
+            return "GLD";
+        case ADSBTypes::kEmitterCategoryLighterThanAir:
+            return "LTA";
+        case ADSBTypes::kEmitterCategoryParachutistSkydiver:
+            return "PAR";
+        case ADSBTypes::kEmitterCategoryUltralightHangGliderParaglider:
+            return "ULT";
+        case ADSBTypes::kEmitterCategoryUnmannedAerialVehicle:
+            return "UAV";
+        case ADSBTypes::kEmitterCategorySpaceTransatmosphericVehicle:
+            return "SPC";
+        case ADSBTypes::kEmitterCategorySurfaceEmergencyVehicle:
+        case ADSBTypes::kEmitterCategorySurfaceServiceVehicle:
+            return "SRF";
+        case ADSBTypes::kEmitterCategoryPointObstacle:
+        case ADSBTypes::kEmitterCategoryClusterObstacle:
+        case ADSBTypes::kEmitterCategoryLineObstacle:
+            return "OBS";
+        default:
+            return "";
+    }
+}
+
 // Populate a RadarTarget from either aircraft type. The shared fields live on the Aircraft base
 // class, and callsign/HasBitFlag/kBitFlag* names are identical on ModeSAircraft and UATAircraft,
 // so one template covers both. Returns false (skip plotting) if the position is not valid.
@@ -33,12 +73,14 @@ bool FillTarget(const AC* ac, RadarTarget& t) {
     }
     t.latitude_deg = ac->latitude_deg;
     t.longitude_deg = ac->longitude_deg;
-    t.baro_altitude_ft = ac->baro_altitude_ft;
-    t.baro_altitude_valid = ac->HasBitFlag(AC::kBitFlagBaroAltitudeValid);
+    t.geom_altitude_ft = ac->gnss_altitude_ft;
+    t.geom_altitude_valid = ac->HasBitFlag(AC::kBitFlagGNSSAltitudeValid);
     t.direction_deg = ac->direction_deg;
     t.speed_kts = ac->speed_kts;
     t.direction_valid = ac->HasBitFlag(AC::kBitFlagDirectionValid);
+    t.icao_address = ac->icao_address;
     strncpy(t.callsign, ac->callsign, sizeof(t.callsign) - 1);
+    strncpy(t.category, EmitterCategoryAbbrev(ac->emitter_category), sizeof(t.category) - 1);
     return true;
 }
 }  // namespace
@@ -53,17 +95,33 @@ bool Display::Init() {
 
     // Reusable off-screen strip for banded, flicker-free rendering. There is no PSRAM, so buffers
     // compete with WiFi/lwIP/TLS and the AircraftDictionary in fragmented internal SRAM: a
-    // full-frame buffer does not fit at any depth (largest free block ~31 KB << ~115 KB at 16-bit
-    // / ~57 KB at 8-bit). A single 240xkBandHeight 16-bit strip (~19 KB, see kBandHeight) fits and
-    // is reused for every band, keeping full color. If even this small allocation fails we fall
-    // back to drawing directly to the panel (functional, but flickers).
-    static_assert(RadarView::kScreenHeight % kBandHeight == 0, "kBandHeight must divide screen height");
+    // full-frame buffer does not fit at any depth. Whatever contiguous block is free when the
+    // display comes up depends on heap fragmentation, so try progressively smaller 16-bit strips
+    // (kBandHeightCandidates) and keep the first that allocates -- a shorter strip just means more
+    // bands per frame (negligible at ~5 Hz) and preserves flicker-free rendering. Only if even the
+    // smallest fails do we fall back to drawing directly to the panel (functional, but flickers).
+    static_assert(
+        [] {
+            for (int16_t h : kBandHeightCandidates)
+                if (h <= 0 || RadarView::kScreenHeight % h != 0) return false;
+            return true;
+        }(),
+        "every band height candidate must evenly divide screen height");
     band_ = new LGFX_Sprite(&lcd_);
     band_->setColorDepth(16);
-    if (band_->createSprite(RadarView::kScreenWidth, kBandHeight) == nullptr) {
-        CONSOLE_WARNING(kTag, "Strip buffer alloc failed; falling back to direct panel draw (may flicker).");
+    for (int16_t candidate : kBandHeightCandidates) {
+        if (band_->createSprite(RadarView::kScreenWidth, candidate) != nullptr) {
+            band_height_ = candidate;
+            break;
+        }
+    }
+    if (band_height_ == 0) {
+        CONSOLE_WARNING(kTag, "Strip buffer alloc failed at every height; direct panel draw (may flicker).");
         delete band_;
         band_ = nullptr;
+    } else {
+        CONSOLE_INFO(kTag, "Strip buffer allocated at %d rows (%d bands).", band_height_,
+                     RadarView::kScreenHeight / band_height_);
     }
 
     ShowSplash();
@@ -124,6 +182,9 @@ void Display::Update() {
     // cheap.
     radar_.SetRangeKm(settings_manager.settings.display_range_km);
 
+    // Advance the trail clock and expire stale trails once per frame (not per band).
+    radar_.BeginFrame(now_ms);
+
     RenderFrame(ResolveCenter());
 }
 
@@ -161,7 +222,7 @@ void Display::RenderFrame(bool position_valid) {
         // out-of-strip pixels) and push each strip to its screen row. Every screen region is
         // written exactly once per frame, so there is no clear-then-redraw flicker. The scene is
         // redrawn per band, but at ~5 Hz over a handful of aircraft the cost is negligible.
-        for (int16_t y0 = 0; y0 < RadarView::kScreenHeight; y0 += kBandHeight) {
+        for (int16_t y0 = 0; y0 < RadarView::kScreenHeight; y0 += band_height_) {
             radar_.SetOriginY(y0);
             DrawScene(band_, position_valid);
             band_->pushSprite(0, y0);

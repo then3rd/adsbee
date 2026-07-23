@@ -27,12 +27,14 @@ class LGFXBase;
 struct RadarTarget {
     float latitude_deg = 0.0f;
     float longitude_deg = 0.0f;
-    int32_t baro_altitude_ft = 0;
+    int32_t geom_altitude_ft = 0;
     float direction_deg = 0.0f;
     int32_t speed_kts = 0;
     bool direction_valid = false;
-    bool baro_altitude_valid = false;
+    bool geom_altitude_valid = false;
     char callsign[16] = {0};
+    char category[4] = {0};       // 3-letter emitter-category abbreviation, "" if unknown.
+    uint32_t icao_address = 0;    // Identity used to key the position trail.
 };
 
 class RadarView {
@@ -114,6 +116,14 @@ class RadarView {
      */
     void DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target);
 
+    /**
+     * Mark the start of a new frame. Stores the current timestamp used for trail sampling and
+     * ages out trails for aircraft not seen within kTrailExpiryMs. Must be called exactly once
+     * per frame (not once per band) before the banded render loop.
+     * @param[in] now_ms Milliseconds since boot.
+     */
+    void BeginFrame(uint32_t now_ms);
+
    private:
     // Project lat/lon to screen coordinates (north-up equirectangular). Returns the distance
     // from center in km via out_range_km. cos(center_lat) longitude correction applied.
@@ -125,10 +135,50 @@ class RadarView {
     // center/range change, not once per band.
     void RefreshVisibleAirports();
 
+    // ---- Aircraft position trails ----
+    // How long a trail is retained is a time window (kTrailRetentionMin). The ring buffer is
+    // sized from that window and the sample spacing, and both per-point pruning and whole-trail
+    // expiry are driven by wall-clock age, not by a raw sample count.
+    //
+    // Memory note: this table lives in static SRAM (no PSRAM on this board) and competes with the
+    // banded-render strip buffer and WiFi/lwIP/TLS. Total footprint is
+    // kMaxTrails * kTrailLen * 12 bytes; keep it near ~10 KB so the strip buffer can still
+    // allocate (otherwise rendering falls back to flickery direct-to-panel draw). To lengthen the
+    // window, prefer raising kTrailSampleMs (coarser breadcrumbs) over growing the point count.
+    static constexpr int kMaxTrails = 16;              // Aircraft tracked simultaneously.
+    static constexpr uint32_t kTrailRetentionMin = 5;  // Minutes of history to retain per trail.
+    static constexpr uint32_t kTrailSampleMs = 6000;   // Min spacing between samples.
+    static constexpr uint32_t kTrailRetentionMs = kTrailRetentionMin * 60u * 1000u;
+    // Ring-buffer depth needed to cover the retention window at the sample rate (+1 slack).
+    static constexpr int kTrailLen = static_cast<int>(kTrailRetentionMs / kTrailSampleMs) + 1;
+    static constexpr uint32_t kTrailExpiryMs = kTrailRetentionMs;  // Drop a trail unseen this long.
+
+    // Per-aircraft breadcrumb ring buffer. Stores lat/lon (not screen coords) so trails
+    // re-project correctly when the range or center changes, plus a per-point timestamp so old
+    // points fall out of the retention window by age.
+    struct Trail {
+        uint32_t icao = 0;             // 0 = empty slot.
+        uint32_t last_seen_ms = 0;     // Frame time this aircraft was last recorded (for expiry).
+        uint32_t last_sample_ms = 0;   // Time the most recent point was appended (for sampling).
+        uint8_t count = 0;             // Valid points in the ring buffer.
+        uint8_t head = 0;              // Next-write index into lat[]/lon[]/t[].
+        float lat[kTrailLen];
+        float lon[kTrailLen];
+        uint32_t t[kTrailLen];         // Sample time of each point (for age-based pruning).
+    };
+
+    // Append the aircraft's current position to its trail, throttled to kTrailSampleMs. Allocates
+    // or evicts a slot as needed. Called once per aircraft per frame (first band only).
+    void RecordTrail(uint32_t icao, float lat, float lon);
+    // Look up an aircraft's trail slot, or nullptr if none.
+    const Trail* FindTrail(uint32_t icao) const;
+
     float center_lat_deg_ = 0.0f;
     float center_lon_deg_ = 0.0f;
     float range_km_ = kDefaultRangeKm;
     int16_t origin_y_ = 0;  // Subtracted from every drawn y (banded rendering); see SetOriginY.
     bool show_runways_ = true;
     bool airports_dirty_ = true;  // In-range airport table needs recompute (center/range moved).
+    uint32_t now_ms_ = 0;         // Current frame timestamp (set by BeginFrame); trail sampling.
+    Trail trails_[kMaxTrails];
 };

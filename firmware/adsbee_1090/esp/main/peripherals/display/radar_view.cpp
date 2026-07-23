@@ -48,12 +48,15 @@ constexpr uint16_t kColorLabel = Rgb565(255, 255, 255);      // White cardinal l
 constexpr uint16_t kColorCenter = Rgb565(255, 255, 255);     // White receiver dot.
 constexpr uint16_t kColorTarget = Rgb565(255, 0, 0);         // Red aircraft.
 constexpr uint16_t kColorTargetTag = Rgb565(255, 255, 255);  // White callsign tag.
-constexpr uint16_t kColorTargetAlt = Rgb565(90, 200, 255);   // Cyan altitude tag.
+constexpr uint16_t kColorTargetCat = Rgb565(90, 200, 255);   // Cyan emitter-category tag.
+constexpr uint16_t kColorTargetAlt = Rgb565(255, 255, 0);    // Yellow altitude tag.
 constexpr uint16_t kColorVector = Rgb565(255, 0, 255);       // Magenta track vector.
 constexpr uint16_t kColorRimDot = Rgb565(255, 0, 0);         // Red off-range bearing dots.
 constexpr uint16_t kColorRunway = Rgb565(56, 150, 170);      // Teal runway lines.
 constexpr uint16_t kColorRunwayLabel = Rgb565(110, 210, 230);  // Lighter teal airport idents.
 constexpr uint16_t kColorAcquiring = 0x8410;                 // Grey "acquiring" text.
+constexpr uint16_t kColorRange = Rgb565(60, 140, 255);       // Blue range/distance text.
+constexpr uint16_t kColorTrail = Rgb565(70, 70, 80);        // Dim, faint position trail.
 
 constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
 constexpr float kKmPerDegLat = 111.0f;
@@ -180,21 +183,43 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
         gfx->fillSmoothCircle(kCenterX, kCenterY - oy, kCenterDotRadiusPx, kColorCenter);
     }
 
-    // Cardinal labels.
+    // Cardinal labels, enlarged and pushed all the way out onto the outer ring. Each is centered
+    // on the ring line, with a background-filled pad breaking the ring behind it (like the range
+    // label). Drawn after the rings so the pad erases the grid underneath.
     gfx->setTextColor(kColorLabel);
     gfx->setTextDatum(lgfx::textdatum_t::middle_center);
+    gfx->setTextSize(1.5f);
+    struct Cardinal {
+        const char* s;
+        int16_t x, y;
+    } const cardinals[] = {
+        {"N", kCenterX, static_cast<int16_t>(kCenterY - kRadiusPx)},
+        {"S", kCenterX, static_cast<int16_t>(kCenterY + kRadiusPx)},
+        {"E", static_cast<int16_t>(kCenterX + kRadiusPx), kCenterY},
+        {"W", static_cast<int16_t>(kCenterX - kRadiusPx), kCenterY},
+    };
+    for (const Cardinal& c : cardinals) {
+        const int16_t cw = gfx->textWidth(c.s);
+        const int16_t ch = gfx->fontHeight();
+        gfx->fillRect(c.x - cw / 2 - 2, c.y - ch / 2 - 1 - oy, cw + 4, ch + 2, kColorBackground);
+        gfx->drawString(c.s, c.x, c.y - oy);
+    }
     gfx->setTextSize(1);
-    gfx->drawString("N", kCenterX, kCenterY - kRadiusPx + 8 - oy);
-    gfx->drawString("S", kCenterX, kCenterY + kRadiusPx - 8 - oy);
-    gfx->drawString("E", kCenterX + kRadiusPx - 8, kCenterY - oy);
-    gfx->drawString("W", kCenterX - kRadiusPx + 8, kCenterY - oy);
 
-    // Range scale label (outer ring range in km) near the bottom of the screen.
+    // Range scale label (outer ring range in km), placed on the east X axis over the
+    // 2nd-from-outside ring so it reads left of the "E". Drawn after the rings/crosshairs so a
+    // background-filled pad can break the green grid where the text sits (avoids overlap).
     char scale_buf[16];
     snprintf(scale_buf, sizeof(scale_buf), "%dkm", static_cast<int>(range_km_ + 0.5f));
-    gfx->setTextColor(kColorGrid);
-    gfx->setTextDatum(lgfx::textdatum_t::bottom_center);
-    gfx->drawString(scale_buf, kCenterX, kScreenHeight - 2 - oy);
+    const int16_t lx = kCenterX + (kRadiusPx * 3) / kRingCount;  // 2nd ring from outside, +X axis.
+    const int16_t ly = kCenterY;
+    gfx->setTextSize(1);
+    gfx->setTextDatum(lgfx::textdatum_t::middle_center);
+    const int16_t tw = gfx->textWidth(scale_buf);
+    const int16_t th = gfx->fontHeight();
+    gfx->fillRect(lx - tw / 2 - 2, ly - th / 2 - 1 - oy, tw + 4, th + 2, kColorBackground);
+    gfx->setTextColor(kColorRange);
+    gfx->drawString(scale_buf, lx, ly - oy);
 
     if (!position_valid) {
         gfx->setTextColor(kColorAcquiring);
@@ -204,12 +229,105 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
     }
 }
 
+void RadarView::BeginFrame(uint32_t now_ms) {
+    now_ms_ = now_ms;
+    // Age out trails for aircraft not seen recently so their slots can be reused.
+    for (Trail& t : trails_) {
+        if (t.icao != 0 && now_ms_ - t.last_seen_ms > kTrailExpiryMs) {
+            t.icao = 0;
+            t.count = 0;
+            t.head = 0;
+        }
+    }
+}
+
+const RadarView::Trail* RadarView::FindTrail(uint32_t icao) const {
+    if (icao == 0) return nullptr;
+    for (const Trail& t : trails_) {
+        if (t.icao == icao) return &t;
+    }
+    return nullptr;
+}
+
+void RadarView::RecordTrail(uint32_t icao, float lat, float lon) {
+    if (icao == 0) return;
+
+    // Locate the aircraft's slot, or claim an empty one, or evict the least-recently-seen.
+    Trail* slot = nullptr;
+    Trail* empty = nullptr;
+    Trail* oldest = &trails_[0];
+    for (Trail& t : trails_) {
+        if (t.icao == icao) {
+            slot = &t;
+            break;
+        }
+        if (empty == nullptr && t.icao == 0) empty = &t;
+        if (t.last_seen_ms < oldest->last_seen_ms) oldest = &t;
+    }
+    if (slot == nullptr) {
+        slot = (empty != nullptr) ? empty : oldest;
+        slot->icao = icao;
+        slot->count = 0;
+        slot->head = 0;
+        slot->last_sample_ms = 0;
+    }
+
+    slot->last_seen_ms = now_ms_;
+
+    // Throttle how often points are appended so the trail spans a useful time window.
+    if (slot->count != 0 && now_ms_ - slot->last_sample_ms < kTrailSampleMs) {
+        return;
+    }
+    slot->lat[slot->head] = lat;
+    slot->lon[slot->head] = lon;
+    slot->t[slot->head] = now_ms_;
+    slot->head = (slot->head + 1) % kTrailLen;
+    if (slot->count < kTrailLen) slot->count++;
+    slot->last_sample_ms = now_ms_;
+}
+
 void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
     // Geometry below is computed in absolute scene coordinates; oy is applied only at the final
     // draw calls so banded rendering (see SetOriginY) lands each strip correctly.
     const int16_t oy = origin_y_;
     float sx, sy, range_km;
     LatLonToScreen(target.latitude_deg, target.longitude_deg, sx, sy, range_km);
+
+    // Record this aircraft's position into its trail once per frame. DrawTarget is called for
+    // every aircraft in every band; gate on the first band (origin_y_ == 0, always drawn first)
+    // so exactly one sample is taken per frame. Recorded before the off-range return so trails
+    // persist as aircraft cross the range edge.
+    if (origin_y_ == 0) {
+        RecordTrail(target.icao_address, target.latitude_deg, target.longitude_deg);
+    }
+
+    // Draw the position trail as the bottom layer: thin faint polyline through the samples still
+    // inside the retention window, clipped to the outer ring. Re-projected each frame so it
+    // tracks range/center; points older than kTrailRetentionMs are skipped (break the polyline).
+    if (const Trail* trail = FindTrail(target.icao_address)) {
+        constexpr int32_t kRadiusSq = static_cast<int32_t>(kRadiusPx) * kRadiusPx;
+        bool have_prev = false;
+        int16_t prev_x = 0, prev_y = 0;
+        for (int i = 0; i < trail->count; i++) {
+            int idx = (trail->head - trail->count + i + kTrailLen) % kTrailLen;
+            if (now_ms_ - trail->t[idx] > kTrailRetentionMs) {
+                have_prev = false;  // Too old: don't connect across the gap.
+                continue;
+            }
+            float px, py, unused_range;
+            LatLonToScreen(trail->lat[idx], trail->lon[idx], px, py, unused_range);
+            int16_t cx = static_cast<int16_t>(px + 0.5f);
+            int16_t cy = static_cast<int16_t>(py + 0.5f);
+            int32_t dx = cx - kCenterX, dy = cy - kCenterY;
+            bool inside = (dx * dx + dy * dy) <= kRadiusSq;
+            if (have_prev && inside) {
+                gfx->drawLine(prev_x, prev_y - oy, cx, cy - oy, kColorTrail);
+            }
+            prev_x = cx;
+            prev_y = cy;
+            have_prev = inside;
+        }
+    }
 
     if (range_km > range_km_) {
         // Off-range: draw a bearing dot on the rim in the aircraft's direction.
@@ -243,37 +361,49 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
                           static_cast<int16_t>(baseLx), static_cast<int16_t>(baseLy - oy),
                           static_cast<int16_t>(baseRx), static_cast<int16_t>(baseRy - oy), kColorTarget);
 
-        // Speed vector.
+        // Speed vector. A crisp 1px line (not a wide line) so it stays centered on the heading
+        // axis the triangle is built on, rather than rounding off to one side.
         if (target.speed_kts > 0) {
             float len = target.speed_kts * kVectorPxPerKt;
             if (len > kVectorMaxPx) len = kVectorMaxPx;
-            gfx->drawWideLine(sx, sy - oy, sx + fx * len, sy + fy * len - oy, 1.5f, kColorVector);
+            gfx->drawLine(static_cast<int16_t>(sx), static_cast<int16_t>(sy - oy),
+                          static_cast<int16_t>(sx + fx * len), static_cast<int16_t>(sy + fy * len - oy),
+                          kColorVector);
         }
     } else {
         // Unknown heading: plain dot.
         gfx->fillSmoothCircle(ix, iy - oy, 3, kColorTarget);
     }
 
-    // Callsign / altitude tag, offset up-right from the target. Prefer the callsign; else fall
-    // back to the flight level, but only when the baro altitude is actually valid (otherwise a
-    // 0 ft placeholder would render a false "000"); else show "?".
-    char tag[24];
-    uint16_t tag_color;
-    const char* cs = (target.callsign[0] != '\0' && target.callsign[0] != '?') ? target.callsign : "";
-    if (cs[0] != '\0') {
-        snprintf(tag, sizeof(tag), "%s", cs);
-        tag_color = kColorTargetTag;  // White callsign.
-    } else if (target.baro_altitude_valid) {
-        snprintf(tag, sizeof(tag), "%03d", static_cast<int>(target.baro_altitude_ft / 100));
-        tag_color = kColorTargetAlt;  // Cyan flight level.
-    } else {
-        snprintf(tag, sizeof(tag), "?");
-        tag_color = kColorTargetTag;
-    }
-    gfx->setTextColor(tag_color);
+    // Stacked tag, offset up-right from the target: callsign (white), then emitter category
+    // (cyan) and altitude in feet (yellow) below it. Lines that have no data are skipped so
+    // they leave no gap.
     gfx->setTextSize(1);
-    gfx->setTextDatum(lgfx::textdatum_t::bottom_left);
-    gfx->drawString(tag, ix + 5, iy - 3 - oy);
+    gfx->setTextDatum(lgfx::textdatum_t::top_left);
+    const int16_t tag_x = ix + 5;
+    int16_t tag_y = iy - 3 - oy;
+    const int16_t line_h = gfx->fontHeight();
+    char tag[24];
+
+    // Line 1: callsign, or "?" when none is known.
+    const char* cs = (target.callsign[0] != '\0' && target.callsign[0] != '?') ? target.callsign : "";
+    gfx->setTextColor(kColorTargetTag);  // White callsign.
+    gfx->drawString(cs[0] != '\0' ? cs : "?", tag_x, tag_y);
+    tag_y += line_h;
+
+    // Line 2: emitter category abbreviation (only when known).
+    if (target.category[0] != '\0') {
+        gfx->setTextColor(kColorTargetCat);  // Cyan category.
+        gfx->drawString(target.category, tag_x, tag_y);
+        tag_y += line_h;
+    }
+
+    // Line 3: geometric (GNSS) altitude in feet (only when valid, to avoid a false "0ft").
+    if (target.geom_altitude_valid) {
+        snprintf(tag, sizeof(tag), "%dft", static_cast<int>(target.geom_altitude_ft));
+        gfx->setTextColor(kColorTargetAlt);  // Yellow altitude.
+        gfx->drawString(tag, tag_x, tag_y);
+    }
 }
 
 void RadarView::RefreshVisibleAirports() {
