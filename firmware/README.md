@@ -51,6 +51,26 @@ just flash-deps        # installs Pillow (and other Python deps) into .venv
 
 To change how the logo is framed, edit the `ZOOM` constant near the top of `gen_splash_image.py` (higher = bee larger / more cropped, lower = smaller / more of the logo visible) and rebuild. No manual generation step is needed — the build picks up PNG or `ZOOM` changes automatically.
 
+### Airport / runway overlay datasets
+
+The radar view can draw runway lines and airport idents underneath the aircraft symbols. That overlay is fed by embedded datasets generated from [OurAirports](https://ourairports.com/data/) (public-domain) data. Coordinates are stored as `int32` degrees × 1e7 in `.rodata` (memory-mapped flash), so a dataset costs flash, not RAM.
+
+Unlike the boot splash, these datasets are **committed to the repo** (not gitignored, not regenerated on every build) — regenerate them only when you want fresh data or a new category. The generator is `firmware/scripts/build_airports.py` (stdlib only, no extra deps):
+
+```bash
+python3 firmware/scripts/build_airports.py                              # large_airport (default)
+python3 firmware/scripts/build_airports.py --category medium_airport
+python3 firmware/scripts/build_airports.py --category large_airport heliport
+```
+
+`--category` accepts one or more OurAirports `type` values: `large_airport`, `medium_airport`, `small_airport`, `heliport`, `seaplane_base`, `balloonport`, `closed`. Each category produces its own pair of files in `esp/main/peripherals/display/` — `<slug>.hh` and `<slug>_data.cpp` (e.g. `medium_airports.{hh,cpp}`) — in namespace `data::<slug>`, so multiple categories can coexist. Shared POD types (`Airport`, `Runway`, `AirportDataset`) live in `airport_data.hh`.
+
+**Which categories actually render** is controlled by the `kEnabledDatasets[]` table near the top of `esp/main/peripherals/display/radar_view.cpp`. By default only `large_airports` is enabled. To add a category: generate it with the script, then add its header include plus a `&data::<slug>::kDataset` entry to that table. Datasets not listed in the table are dropped from the image by `--gc-sections`, so generating extra files costs nothing until you enable them.
+
+> **Regenerate CMake after adding a new dataset file.** ESP-IDF globs `SRC_DIRS` at CMake *configure* time, so a plain incremental build won't compile a newly generated `<slug>_data.cpp` — the link fails with `undefined reference to data::<slug>::kAirports`. Force a reconfigure first: `touch esp/main/CMakeLists.txt` (or `build.sh clean esp`), then `build.sh esp`. Editing an already-tracked dataset in place does not need this.
+
+> **Flash footprint:** `large_airport` is ~55 KB. `medium_airport` is roughly 3× the airports and `small_airport` far more — check the ESP32 partition headroom (`build.sh esp` prints free space) before enabling the larger tiers.
+
 ---
 
 ## Building Firmware

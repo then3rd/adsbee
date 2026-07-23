@@ -6,11 +6,33 @@
 
 #include <cmath>
 
-#include "large_airports.hh"  // Embedded airport/runway dataset for the overlay.
-#include "lgfx_config.hpp"     // Pulls in LovyanGFX (lgfx::LGFXBase and drawing primitives).
+// Embedded airport/runway datasets rendered by the overlay. To add a category: generate it with
+//   python3 firmware/scripts/build_airports.py --category <type>
+// then include its header here and add &data::<slug>::kDataset to kEnabledDatasets below. The
+// default is large airports only, which preserves the original flash footprint; each added
+// dataset grows .rodata by its size (medium/small airports are substantially larger).
+#include "large_airports.hh"
+#include "medium_airports.hh"
+// #include "small_airports.hh"
+#include "lgfx_config.hpp"  // Pulls in LovyanGFX (lgfx::LGFXBase and drawing primitives).
 
 namespace {
-namespace airports = data::large_airports;
+
+// The set of datasets the overlay draws. This is the single knob for which categories render.
+constexpr const data::AirportDataset* kEnabledDatasets[] = {
+    &data::large_airports::kDataset,
+    &data::medium_airports::kDataset,
+    // &data::small_airports::kDataset,
+};
+constexpr size_t kEnabledDatasetCount = sizeof(kEnabledDatasets) / sizeof(kEnabledDatasets[0]);
+
+// Total airports across all enabled datasets; sizes the visibility cache below.
+constexpr size_t ComputeTotalAirportCount() {
+    size_t total = 0;
+    for (size_t d = 0; d < kEnabledDatasetCount; d++) total += kEnabledDatasets[d]->airport_count;
+    return total;
+}
+constexpr size_t kTotalAirportCount = ComputeTotalAirportCount();
 
 // Pack 8-bit RGB into RGB565. LovyanGFX applies the panel's BGR order internally (the panel is
 // configured cfg.rgb_order = false), so standard RGB565 values render with correct hue -- no
@@ -54,9 +76,10 @@ constexpr int kRunwayLabelGapPx = 3;          // Gap from ring to ident label.
 // Convert an e7 (degrees x 1e7) coordinate to degrees.
 constexpr float E7ToDeg(int32_t e7) { return static_cast<float>(e7) * 1e-7f; }
 
-// In-range airport table, indexed by airport index. File-static (there is only ever one
-// RadarView) and recomputed by RefreshVisibleAirports() when the center/range changes.
-bool s_airport_in_range[airports::kAirportCount];
+// In-range airport table, indexed by a global airport index (dataset base offset + per-dataset
+// index; see RefreshVisibleAirports). File-static (there is only ever one RadarView) and
+// recomputed by RefreshVisibleAirports() when the center/range changes.
+bool s_airport_in_range[kTotalAirportCount];
 
 int DistSqFromCenter(int x, int y) {
     const int dx = x - RadarView::kCenterX;
@@ -254,13 +277,19 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
 }
 
 void RadarView::RefreshVisibleAirports() {
-    // Mark every airport whose center lies within the current display range. Runs once per
-    // center/range change (gated by airports_dirty_), not once per band.
-    for (size_t i = 0; i < airports::kAirportCount; i++) {
-        const airports::Airport& ap = airports::kAirports[i];
-        float sx, sy, range_km;
-        LatLonToScreen(E7ToDeg(ap.lat_e7), E7ToDeg(ap.lon_e7), sx, sy, range_km);
-        s_airport_in_range[i] = (range_km <= range_km_);
+    // Mark every airport (across all enabled datasets) whose center lies within the current
+    // display range. Runs once per center/range change (gated by airports_dirty_), not once per
+    // band. The global index is the dataset's base offset plus its per-dataset airport index.
+    size_t base = 0;
+    for (size_t d = 0; d < kEnabledDatasetCount; d++) {
+        const data::AirportDataset& ds = *kEnabledDatasets[d];
+        for (size_t i = 0; i < ds.airport_count; i++) {
+            const data::Airport& ap = ds.airports[i];
+            float sx, sy, range_km;
+            LatLonToScreen(E7ToDeg(ap.lat_e7), E7ToDeg(ap.lon_e7), sx, sy, range_km);
+            s_airport_in_range[base + i] = (range_km <= range_km_);
+        }
+        base += ds.airport_count;
     }
     airports_dirty_ = false;
 }
@@ -271,23 +300,29 @@ void RadarView::DrawAirports(lgfx::LGFXBase* gfx) {
 
     const int16_t oy = origin_y_;
 
-    // Runway lines. Runways are grouped by airport; skip any whose airport is out of range, then
-    // clip the segment to the outer ring so nothing spills past the bezel.
-    for (size_t i = 0; i < airports::kRunwayCount; i++) {
-        const airports::Runway& rw = airports::kRunways[i];
-        if (!s_airport_in_range[rw.airport_idx]) continue;
+    // Runway lines, per dataset. Runways are grouped by airport; skip any whose airport is out of
+    // range, then clip the segment to the outer ring so nothing spills past the bezel. rw.airport_idx
+    // is relative to its own dataset, so add the dataset's base offset for the visibility lookup.
+    size_t base = 0;
+    for (size_t d = 0; d < kEnabledDatasetCount; d++) {
+        const data::AirportDataset& ds = *kEnabledDatasets[d];
+        for (size_t i = 0; i < ds.runway_count; i++) {
+            const data::Runway& rw = ds.runways[i];
+            if (!s_airport_in_range[base + rw.airport_idx]) continue;
 
-        float lx, ly, hx, hy, r;
-        LatLonToScreen(E7ToDeg(rw.le_lat_e7), E7ToDeg(rw.le_lon_e7), lx, ly, r);
-        LatLonToScreen(E7ToDeg(rw.he_lat_e7), E7ToDeg(rw.he_lon_e7), hx, hy, r);
+            float lx, ly, hx, hy, r;
+            LatLonToScreen(E7ToDeg(rw.le_lat_e7), E7ToDeg(rw.le_lon_e7), lx, ly, r);
+            LatLonToScreen(E7ToDeg(rw.he_lat_e7), E7ToDeg(rw.he_lon_e7), hx, hy, r);
 
-        int x0 = static_cast<int>(lroundf(lx)), y0 = static_cast<int>(lroundf(ly));
-        int x1 = static_cast<int>(lroundf(hx)), y1 = static_cast<int>(lroundf(hy));
-        if (!SegmentIntersectsDisc(x0, y0, x1, y1)) continue;
-        ClipEndpointToRing(x0, y0, x1, y1);
-        ClipEndpointToRing(x1, y1, x0, y0);
+            int x0 = static_cast<int>(lroundf(lx)), y0 = static_cast<int>(lroundf(ly));
+            int x1 = static_cast<int>(lroundf(hx)), y1 = static_cast<int>(lroundf(hy));
+            if (!SegmentIntersectsDisc(x0, y0, x1, y1)) continue;
+            ClipEndpointToRing(x0, y0, x1, y1);
+            ClipEndpointToRing(x1, y1, x0, y0);
 
-        gfx->drawWideLine(x0, y0 - oy, x1, y1 - oy, kRunwayLineHalfWidth, kColorRunway);
+            gfx->drawWideLine(x0, y0 - oy, x1, y1 - oy, kRunwayLineHalfWidth, kColorRunway);
+        }
+        base += ds.airport_count;
     }
 
     // Airport idents, one per in-range airport, anchored on (or clipped onto) the outer ring and
@@ -295,25 +330,30 @@ void RadarView::DrawAirports(lgfx::LGFXBase* gfx) {
     gfx->setTextColor(kColorRunwayLabel);
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::bottom_center);
-    for (size_t i = 0; i < airports::kAirportCount; i++) {
-        if (!s_airport_in_range[i]) continue;
-        const airports::Airport& ap = airports::kAirports[i];
+    base = 0;
+    for (size_t d = 0; d < kEnabledDatasetCount; d++) {
+        const data::AirportDataset& ds = *kEnabledDatasets[d];
+        for (size_t i = 0; i < ds.airport_count; i++) {
+            if (!s_airport_in_range[base + i]) continue;
+            const data::Airport& ap = ds.airports[i];
 
-        float sx, sy, range_km;
-        LatLonToScreen(E7ToDeg(ap.lat_e7), E7ToDeg(ap.lon_e7), sx, sy, range_km);
-        int ax = static_cast<int>(lroundf(sx)), ay = static_cast<int>(lroundf(sy));
-        ClipPointOntoRing(ax, ay);
+            float sx, sy, range_km;
+            LatLonToScreen(E7ToDeg(ap.lat_e7), E7ToDeg(ap.lon_e7), sx, sy, range_km);
+            int ax = static_cast<int>(lroundf(sx)), ay = static_cast<int>(lroundf(sy));
+            ClipPointOntoRing(ax, ay);
 
-        // Offset the label radially outward from center by the gap.
-        const int dx = ax - kCenterX;
-        const int dy = ay - kCenterY;
-        const float len = sqrtf(static_cast<float>(dx * dx + dy * dy));
-        int lxp = ax, lyp = ay - kRunwayLabelGapPx;
-        if (len >= 1.0f) {
-            lxp = ax + static_cast<int>(lroundf(dx / len * kRunwayLabelGapPx));
-            lyp = ay + static_cast<int>(lroundf(dy / len * kRunwayLabelGapPx));
+            // Offset the label radially outward from center by the gap.
+            const int dx = ax - kCenterX;
+            const int dy = ay - kCenterY;
+            const float len = sqrtf(static_cast<float>(dx * dx + dy * dy));
+            int lxp = ax, lyp = ay - kRunwayLabelGapPx;
+            if (len >= 1.0f) {
+                lxp = ax + static_cast<int>(lroundf(dx / len * kRunwayLabelGapPx));
+                lyp = ay + static_cast<int>(lroundf(dy / len * kRunwayLabelGapPx));
+            }
+            gfx->drawString(ap.ident, lxp, lyp - oy);
         }
-        gfx->drawString(ap.ident, lxp, lyp - oy);
+        base += ds.airport_count;
     }
 }
 

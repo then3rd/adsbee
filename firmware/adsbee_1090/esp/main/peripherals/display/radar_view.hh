@@ -97,9 +97,10 @@ class RadarView {
     void DrawBackground(lgfx::LGFXBase* gfx, bool position_valid);
 
     /**
-     * Draw the runway lines and airport idents for every "large" airport within range of the
-     * center, from the embedded dataset (see large_airports.hh). No-op if the overlay is
-     * disabled. Call after DrawBackground and before DrawTarget so aircraft draw on top.
+     * Draw the runway lines and airport idents for every airport within range of the center,
+     * across all enabled embedded datasets (see the kEnabledDatasets table in radar_view.cpp).
+     * No-op if the overlay is disabled. Call after DrawBackground and before DrawTarget so
+     * aircraft draw on top.
      * @param[in] gfx Canvas to draw onto.
      */
     void DrawAirports(lgfx::LGFXBase* gfx);
