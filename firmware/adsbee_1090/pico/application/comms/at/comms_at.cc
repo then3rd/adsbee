@@ -171,6 +171,33 @@ CPP_AT_CALLBACK(CommsManager::ATLEDEnableCallback) {
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
 
+CPP_AT_CALLBACK(CommsManager::ATDisplayRangeCallback) {
+    switch (op) {
+        case '?':
+            // Printed as an integer km to avoid float printf (disabled in the nano libc build).
+            CPP_AT_CMD_PRINTF("=%d", static_cast<int>(settings_manager.settings.display_range_km + 0.5f));
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        case '=':
+            if (CPP_AT_HAS_ARG(0)) {
+                float range_km;
+                CPP_AT_TRY_ARG2NUM(0, range_km);
+                if (range_km < SettingsManager::Settings::kMinDisplayRangeKm ||
+                    range_km > SettingsManager::Settings::kMaxDisplayRangeKm) {
+                    CPP_AT_ERROR("Display range must be between %d and %d km.",
+                                 static_cast<int>(SettingsManager::Settings::kMinDisplayRangeKm),
+                                 static_cast<int>(SettingsManager::Settings::kMaxDisplayRangeKm));
+                }
+                settings_manager.settings.display_range_km = range_km;
+                // Push the new range to the ESP32 so the display picks it up.
+                settings_manager.SyncToCoprocessors();
+                CPP_AT_SUCCESS();
+            }
+            break;
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
 CPP_AT_CALLBACK(CommsManager::ATBootloader) {
     switch (op) {
         case '=': {
@@ -1349,6 +1376,12 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .max_args = 5,  // TODO: check this value.
      .help_string = "AT+DEVICE_INFO?\r\n\tQuery device information.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDeviceInfoCallback, comms_manager)},
+    {.command = "DISPLAY_RANGE",
+     .min_args = 0,
+     .max_args = 1,
+     .help_string = "AT+DISPLAY_RANGE=<range_km>\r\n\tSet the radar display outer-ring range (zoom) in "
+                    "kilometers (smaller = more zoomed in).\r\n\tAT+DISPLAY_RANGE?\r\n\tQuery the current range.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDisplayRangeCallback, comms_manager)},
     {.command = "ETHERNET",
      .min_args = 0,
      .max_args = 1,

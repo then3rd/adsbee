@@ -1,11 +1,12 @@
 // Sonar-style radar rendering for the GC9A01 round display.
 //
-// Attribution: the projection and drawing approach is ported from ESP32-Plane-Radar
+// Attribution: the projection, palette and drawing approach are ported from ESP32-Plane-Radar
 // (https://github.com/MatixYo/ESP32-Plane-Radar, MIT License, (c) 2026 MatixYo), files
-// src/ui/radar_display.cpp, include/ui/radar_theme.h and src/ui/radar_range.cpp. The
-// equirectangular latLonToScreen projection is reused with a bug fix: Plane-Radar omits the
-// cos(latitude) correction on the longitude term (fine within ~25 km, wrong beyond); we apply
-// it here. MIT->GPL-3.0 reuse is permitted with attribution.
+// src/ui/radar_display.cpp, include/ui/radar_theme.h, src/ui/radar_range.cpp and
+// src/ui/runway_overlay.cpp. The equirectangular latLonToScreen projection is reused with a
+// bug fix: Plane-Radar omits the cos(latitude) correction on the longitude term (fine within
+// ~25 km, wrong beyond); we apply it here. The runway/airport overlay and its embedded dataset
+// (see large_airports.hh) are ported likewise. MIT->GPL-3.0 reuse is permitted with attribution.
 #pragma once
 
 #include <cstdint>
@@ -52,14 +53,29 @@ class RadarView {
      * @param[in] longitude_deg Center longitude in degrees.
      */
     void SetCenter(float latitude_deg, float longitude_deg) {
-        center_lat_deg_ = latitude_deg;
-        center_lon_deg_ = longitude_deg;
+        // Only invalidate the in-range airport cache when the center actually moves, so the
+        // per-frame SetCenter() call (with an unchanged fix) does not force a recompute.
+        if (latitude_deg != center_lat_deg_ || longitude_deg != center_lon_deg_) {
+            center_lat_deg_ = latitude_deg;
+            center_lon_deg_ = longitude_deg;
+            airports_dirty_ = true;
+        }
     }
 
     /**
      * Set the range represented by the outermost ring, in kilometers.
      */
-    void SetRangeKm(float range_km) { range_km_ = range_km; }
+    void SetRangeKm(float range_km) {
+        if (range_km != range_km_) {
+            range_km_ = range_km;
+            airports_dirty_ = true;
+        }
+    }
+
+    /**
+     * Enable/disable the runway + airport-ident overlay. On by default.
+     */
+    void SetShowRunways(bool show) { show_runways_ = show; }
 
     /**
      * Set a vertical render offset (in pixels) subtracted from every drawn y coordinate.
@@ -81,6 +97,14 @@ class RadarView {
     void DrawBackground(lgfx::LGFXBase* gfx, bool position_valid);
 
     /**
+     * Draw the runway lines and airport idents for every "large" airport within range of the
+     * center, from the embedded dataset (see large_airports.hh). No-op if the overlay is
+     * disabled. Call after DrawBackground and before DrawTarget so aircraft draw on top.
+     * @param[in] gfx Canvas to draw onto.
+     */
+    void DrawAirports(lgfx::LGFXBase* gfx);
+
+    /**
      * Project and draw one aircraft. If the aircraft is within range it is drawn as a heading
      * triangle (with a speed vector and callsign/altitude tag); if beyond range it is drawn as
      * a bearing dot on the rim.
@@ -95,8 +119,15 @@ class RadarView {
     void LatLonToScreen(float latitude_deg, float longitude_deg, float& out_x, float& out_y,
                         float& out_range_km) const;
 
+    // Recompute which embedded airports fall within range_km_ of the center into the file-static
+    // in-range table (see radar_view.cpp). Cheap-gated by airports_dirty_ so it runs once per
+    // center/range change, not once per band.
+    void RefreshVisibleAirports();
+
     float center_lat_deg_ = 0.0f;
     float center_lon_deg_ = 0.0f;
     float range_km_ = kDefaultRangeKm;
     int16_t origin_y_ = 0;  // Subtracted from every drawn y (banded rendering); see SetOriginY.
+    bool show_runways_ = true;
+    bool airports_dirty_ = true;  // In-range airport table needs recompute (center/range moved).
 };

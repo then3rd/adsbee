@@ -100,6 +100,11 @@ void Display::Update() {
     }
     last_frame_timestamp_ms_ = now_ms;
 
+    // Pick up the latest range/zoom setting (synced from the RP2040 over SPI). SetRangeKm() only
+    // marks the airport cache dirty when the value actually changes, so applying it every frame is
+    // cheap.
+    radar_.SetRangeKm(settings_manager.settings.display_range_km);
+
     RenderFrame(ResolveCenter());
 }
 
@@ -107,6 +112,9 @@ void Display::DrawScene(lgfx::LGFXBase* gfx, bool position_valid) {
     radar_.DrawBackground(gfx, position_valid);
 
     if (position_valid) {
+        // Runway/airport overlay sits under the aircraft symbols.
+        radar_.DrawAirports(gfx);
+
         // The ESP32 main loop owns the aircraft dictionary, so it is safe to iterate it directly
         // here (same task as ADSBeeServer::Update()). NOTE: this single-task guarantee covers the
         // dictionary only -- the rx_position read in ResolveCenter() is cross-core (see there). If

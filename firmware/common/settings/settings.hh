@@ -13,7 +13,7 @@
 #include "pico/rand.h"
 #endif
 
-static constexpr uint32_t kSettingsVersion = 13;  // Change this when settings format changes!
+static constexpr uint32_t kSettingsVersion = 14;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 class SettingsManager {
@@ -208,6 +208,14 @@ class SettingsManager {
 
         // Receiver position settings
         RxPosition rx_position;
+
+        // Display settings
+        // Radar outer-ring range (zoom) in kilometers; smaller = more zoomed in. Consumed by the
+        // ESP32 display (RadarView::SetRangeKm) once the settings struct is synced over SPI.
+        static constexpr float kDefaultDisplayRangeKm = 50.0f;
+        static constexpr float kMinDisplayRangeKm = 1.0f;
+        static constexpr float kMaxDisplayRangeKm = 500.0f;
+        float display_range_km = kDefaultDisplayRangeKm;
 
         /**
          * Default constructor.
