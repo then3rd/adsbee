@@ -239,7 +239,30 @@ void Display::Update() {
     // Advance the trail clock and expire stale trails once per frame (not per band).
     radar_.BeginFrame(now_ms);
 
-    RenderFrame(ResolveCenter());
+    const bool position_valid = ResolveCenter();
+
+    // Gather this frame's plottable targets once (the ESP32 main loop owns the dictionary, so
+    // iterating it here is safe -- same task as ADSBeeServer::Update(); if a dedicated render task
+    // is ever introduced this must switch to a snapshot queue). The tag layout needs all positions
+    // up front and every band redraws the same set, so we snapshot once rather than per band.
+    frame_target_count_ = 0;
+    if (position_valid) {
+        for (auto& itr : adsbee_server.aircraft_dictionary.dict) {
+            if (frame_target_count_ >= kMaxFrameTargets) break;
+            RadarTarget target;
+            bool plot = false;
+            if (ModeSAircraft* ac = std::get_if<ModeSAircraft>(&itr.second)) {
+                plot = FillTarget(ac, target);
+            } else if (UATAircraft* ac = std::get_if<UATAircraft>(&itr.second)) {
+                plot = FillTarget(ac, target);
+            }
+            if (plot) frame_targets_[frame_target_count_++] = target;
+        }
+        // Force-directed placement of every callsign/altitude tag before the banded draw loop.
+        radar_.LayoutTags(frame_targets_, frame_target_count_);
+    }
+
+    RenderFrame(position_valid);
 }
 
 void Display::DrawScene(lgfx::LGFXBase* gfx, bool position_valid) {
@@ -249,23 +272,10 @@ void Display::DrawScene(lgfx::LGFXBase* gfx, bool position_valid) {
         // Runway/airport overlay sits under the aircraft symbols.
         radar_.DrawAirports(gfx);
 
-        // The ESP32 main loop owns the aircraft dictionary, so it is safe to iterate it directly
-        // here (same task as ADSBeeServer::Update()). NOTE: this single-task guarantee covers the
-        // dictionary only -- the rx_position read in ResolveCenter() is cross-core (see there). If
-        // a dedicated render task is ever introduced, this must switch to a snapshot queue instead.
-        for (auto& itr : adsbee_server.aircraft_dictionary.dict) {
-            RadarTarget target;
-            bool plot = false;
-
-            if (ModeSAircraft* ac = std::get_if<ModeSAircraft>(&itr.second)) {
-                plot = FillTarget(ac, target);
-            } else if (UATAircraft* ac = std::get_if<UATAircraft>(&itr.second)) {
-                plot = FillTarget(ac, target);
-            }
-
-            if (plot) {
-                radar_.DrawTarget(gfx, target);
-            }
+        // Draw the targets snapshotted (and tag-laid-out) this frame in Update(). Redrawn per band;
+        // the renderer clips to the current strip.
+        for (int i = 0; i < frame_target_count_; i++) {
+            radar_.DrawTarget(gfx, frame_targets_[i]);
         }
     }
 }

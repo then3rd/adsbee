@@ -121,6 +121,18 @@ class RadarView {
     void DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target);
 
     /**
+     * Compute the angular placement of every target's callsign/altitude tag for this frame. Must be
+     * called once per frame after BeginFrame() and before the banded DrawTarget() loop, because the
+     * labels must be positioned (using all aircraft positions at once) before any band draws them.
+     * Each label orbits its symbol at a continuous angle relaxed by a force-directed pass so tags
+     * repel each other and fan out; the angle is carried across frames so labels swivel smoothly.
+     * @param[in] targets Array of the frame's plottable targets (in- and off-range both allowed;
+     *            off-range targets are skipped since they render as rim dots without a tag).
+     * @param[in] count Number of entries in targets.
+     */
+    void LayoutTags(const RadarTarget* targets, int count);
+
+    /**
      * Mark the start of a new frame. Stores the current timestamp used for trail sampling and
      * ages out trails for aircraft not seen within kTrailExpiryMs. Must be called exactly once
      * per frame (not once per band) before the banded render loop.
@@ -179,6 +191,27 @@ class RadarView {
     void RecordTrail(uint32_t icao, float lat, float lon);
     // Look up an aircraft's trail slot, or nullptr if none.
     const Trail* FindTrail(uint32_t icao) const;
+
+    // ---- Aircraft tag (callsign/category/altitude) label placement ----
+    // Each tag orbits its heading triangle at a continuous angle rather than sitting at a fixed
+    // offset. LayoutTags() relaxes every label's angle once per frame with a force-directed pass
+    // (labels repel each other and the other symbols, and are pushed in off the rim) so clustered
+    // aircraft fan out and stay legible -- circle-packing by repulsion. The chosen angle is kept
+    // across frames and stepped in small increments, so labels swivel smoothly instead of snapping.
+    // Placement is angle-only in absolute scene coords, so it is identical in every band; DrawTarget
+    // just reads the angle back by ICAO. Footprint: kMaxTags * sizeof(TagLabel).
+    static constexpr int kMaxTags = kMaxTrails;  // Simultaneous on-screen labels laid out.
+    struct TagLabel {
+        uint32_t icao = 0;          // 0 = empty slot.
+        uint32_t last_seen_ms = 0;  // Frame time last laid out (for expiry, mirrors trails).
+        float angle_rad = 0.0f;     // Orbit angle of the label around its symbol (screen space).
+        bool valid = false;         // Angle has been initialized at least once.
+    };
+    TagLabel labels_[kMaxTags];
+
+    // Find an aircraft's persistent label slot (nullptr if none); or acquire/evict one for it.
+    const TagLabel* FindLabel(uint32_t icao) const;
+    TagLabel* AcquireLabel(uint32_t icao);
 
     float center_lat_deg_ = 0.0f;
     float cos_center_lat_ = 1.0f;  // cos(center_lat); cached by SetCenter for LatLonToScreen.

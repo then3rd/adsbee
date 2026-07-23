@@ -5,6 +5,7 @@
 #ifdef WITH_DISPLAY
 
 #include <cmath>
+#include <cstring>
 
 // Embedded airport/runway datasets rendered by the overlay. To add a category: generate it with
 //   python3 firmware/scripts/build_airports.py --category <type>
@@ -58,7 +59,8 @@ constexpr uint16_t kColorAcquiring = 0x8410;                 // Grey "acquiring"
 constexpr uint16_t kColorRange = Rgb565(60, 140, 255);       // Blue range/distance text.
 constexpr uint16_t kColorTrail = Rgb565(70, 70, 80);        // Dim, faint position trail.
 
-constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+constexpr float kPi = 3.14159265358979323846f;
+constexpr float kDegToRad = kPi / 180.0f;
 constexpr float kKmPerDegLat = 111.0f;
 
 // Number of concentric range rings (matches Plane-Radar's 4-ring grid).
@@ -72,6 +74,90 @@ constexpr float kTriangleHalfWidthPx = 4.0f;
 // Speed vector: pixels drawn per knot, capped so fast aircraft don't draw off-screen.
 constexpr float kVectorPxPerKt = 0.06f;
 constexpr float kVectorMaxPx = 28.0f;
+
+// ---- Aircraft tag label layout (force-directed, see RadarView::LayoutTags) ----
+// LovyanGFX's default GLCD glyph is 6x8 px at text size 1; used to size label blocks in the layout
+// pass (which has no canvas to measure against). DrawTarget measures the real widths when drawing.
+constexpr float kFontCharWpx = 6.0f;
+constexpr float kFontLineHpx = 8.0f;
+// A label's center orbits its symbol at this radius plus half the block's diagonal, so the block
+// clears the triangle at every angle.
+constexpr float kTagOrbitClearPx = 9.0f;
+constexpr float kTagLabelRepel = 900.0f;   // Label<->label soft (long-range) repulsion strength.
+constexpr float kTagSymbolRepel = 500.0f;  // Label<->other-symbol soft (long-range) repulsion.
+// Point repulsion alone can't guarantee two label boxes (or a label box and another symbol) don't
+// overlap: inverse-square is measured center-to-center, so two boxes can overlap heavily while
+// their centers are still "far enough". So on top of the soft terms we hard-eject any overlap of
+// the padded axis-aligned boxes, pushing apart along the shortest exit with force proportional to
+// penetration depth. These scales dominate the soft terms whenever boxes actually intersect.
+constexpr float kTagSymbolPadPx = 3.0f;    // Keep-out margin around the label box, per side.
+constexpr float kTagSymbolEject = 3.0f;    // Symbol-in-label-box penetration -> ejection force scale.
+constexpr float kTagLabelEject = 4.0f;     // Label-box overlap penetration -> separation force scale.
+constexpr float kTagRimRepel = 0.8f;       // Inward push once a label crosses the rim margin.
+constexpr float kTagRimMarginPx = 6.0f;    // Start pushing labels inward this far inside the rim.
+// Relaxation is angle-only (each label can only orbit its own symbol), which converges slowly, so
+// run enough iterations with a large enough gain that clustered labels actually swing apart within
+// a frame. The per-iteration clamp still bounds how fast any one label swivels (smooth motion).
+constexpr int kTagRelaxIters = 24;         // Relaxation iterations per frame.
+constexpr float kTagStepGain = 0.05f;      // Force -> angle-step scale.
+constexpr float kTagMaxStepRad = 0.20f;    // Max angle change per iteration (smooth swivel cap).
+// Spring pulling a label toward the angle directly behind the aircraft's heading, so tags prefer to
+// trail the target (like a wake). Weak enough that label/symbol repulsion still wins in a cluster.
+// Spring toward the preferred (beside-the-aircraft, perpendicular-to-heading) angle. Kept weak so
+// that in a cluster the hard box separation wins (legibility first); an isolated label, with no one
+// to repel it, still settles beside its aircraft.
+constexpr float kTagSidePull = 0.04f;
+
+// Accumulate an inverse-distance repulsion of (dx,dy) (from the source to the point) into (fx,fy).
+// Falls off with distance and is clamped near zero separation so coincident points don't blow up.
+inline void AddRepulsion(float& fx, float& fy, float dx, float dy, float k) {
+    float d2 = dx * dx + dy * dy;
+    if (d2 < 1.0f) d2 = 1.0f;  // Avoid the singularity when two points coincide.
+    const float inv = k / d2;  // Magnitude ~ k / distance.
+    fx += dx * inv;
+    fy += dy * inv;
+}
+
+// Eject a symbol out of a label's bounding box. (dx,dy) is the vector from the symbol to the label
+// center; (hw,hh) are the box half-extents already padded by the keep-out margin. If the symbol
+// lies inside the padded box, push the label center out along the axis of least penetration (the
+// shortest way to clear the overlap), with force proportional to how deep the symbol has intruded.
+// No force if the symbol is outside the box, so labels are only shoved when they'd actually cover a
+// symbol -- long-range spreading is left to AddRepulsion.
+inline void AddBoxEject(float& fx, float& fy, float dx, float dy, float hw, float hh, float k) {
+    const float ox = hw - fabsf(dx);  // Penetration on x (>0 => symbol is within the box in x).
+    const float oy = hh - fabsf(dy);  // Penetration on y.
+    if (ox <= 0.0f || oy <= 0.0f) return;  // Symbol clears the box on at least one axis: no overlap.
+    if (ox < oy) {
+        fx += (dx >= 0.0f ? ox : -ox) * k;  // Shortest exit is horizontal.
+    } else {
+        fy += (dy >= 0.0f ? oy : -oy) * k;  // Shortest exit is vertical.
+    }
+}
+
+// Preferred orbit angle for a label whose aircraft has a known heading: beside the aircraft,
+// perpendicular to its direction of travel (so it reads like a callout to the side, not a wake).
+// Screen space: heading hr (0 = north, clockwise) gives forward = (sin hr, -cos hr); the two
+// perpendicular screen directions are at angles hr (right of travel) and hr+pi (left). Choose the
+// side pointing more outward from the radar center (sx,sy vs. center) so tags sit toward the rim
+// and off the center crosshairs rather than being pinned to a fixed left/right side.
+inline float TagSideAngle(float hr, float sx, float sy) {
+    const float side_x = cosf(hr), side_y = sinf(hr);  // Right-of-travel screen direction.
+    const float out_x = sx - RadarView::kCenterX, out_y = sy - RadarView::kCenterY;
+    return (side_x * out_x + side_y * out_y >= 0.0f) ? hr : (hr + kPi);
+}
+
+// Orbit radius that places a label box (text half-extents thw,thh) centered along `angle` so the
+// symbol sits `clear` px outside the box's nearest edge -- i.e. the tag hugs the triangle at every
+// angle. For an axis-aligned box the center-to-edge distance along a unit direction is
+// 1 / max(|cos|/thw, |sin|/thh); add the clearance margin. This replaces a fixed worst-case
+// (half-diagonal) radius, which parked cardinal-ish placements needlessly far out.
+inline float TagOrbitRadius(float angle, float thw, float thh, float clear) {
+    const float ex = fabsf(cosf(angle)) / thw;
+    const float ey = fabsf(sinf(angle)) / thh;
+    const float e = ex > ey ? ex : ey;
+    return clear + (e > 1e-4f ? 1.0f / e : 0.0f);
+}
 
 // ---- Runway overlay ----
 constexpr float kRunwayLineHalfWidth = 1.0f;  // drawWideLine half-width (~2 px stroke).
@@ -301,6 +387,151 @@ void RadarView::RecordTrail(uint32_t icao, float lat, float lon) {
     slot->last_sample_ms = now_ms_;
 }
 
+const RadarView::TagLabel* RadarView::FindLabel(uint32_t icao) const {
+    if (icao == 0) return nullptr;
+    for (const TagLabel& l : labels_) {
+        if (l.icao == icao) return &l;
+    }
+    return nullptr;
+}
+
+RadarView::TagLabel* RadarView::AcquireLabel(uint32_t icao) {
+    if (icao == 0) return nullptr;
+    TagLabel* empty = nullptr;
+    TagLabel* oldest = &labels_[0];
+    for (TagLabel& l : labels_) {
+        if (l.icao == icao) return &l;
+        if (empty == nullptr && l.icao == 0) empty = &l;
+        if (l.last_seen_ms < oldest->last_seen_ms) oldest = &l;
+    }
+    // No existing slot: reuse an empty one, else evict the least-recently-laid-out label.
+    TagLabel* slot = (empty != nullptr) ? empty : oldest;
+    slot->icao = icao;
+    slot->valid = false;  // Force re-seed of the orbit angle for the new occupant.
+    return slot;
+}
+
+void RadarView::LayoutTags(const RadarTarget* targets, int count) {
+    // Expire labels for aircraft not seen recently (mirrors trail expiry) so slots can be reused.
+    for (TagLabel& l : labels_) {
+        if (l.icao != 0 && now_ms_ - l.last_seen_ms > kTrailExpiryMs) l = TagLabel{};
+    }
+
+    // Build the working set of in-range targets (off-range ones are rim dots with no tag). Each
+    // gets a persistent angle slot; new labels seed at their preferred angle (behind the aircraft
+    // when its heading is known, else radially outward from the busy center) so the first frame is
+    // already sensible.
+    struct Work {
+        TagLabel* slot;
+        float px, py;      // Symbol anchor, screen coords.
+        float r;           // Orbit radius of the label center (recomputed per angle each iteration).
+        float thw, thh;    // Text block half-extents (unpadded), for the per-angle orbit radius.
+        float hw, hh;      // Label box half-extents (padded), for symbol/label box-ejection.
+        float pref_angle;  // Preferred orbit angle: beside the heading, or radially outward.
+    } work[kMaxTags];
+    int n = 0;
+
+    for (int i = 0; i < count && n < kMaxTags; i++) {
+        const RadarTarget& t = targets[i];
+        float sx, sy, range_km;
+        LatLonToScreen(t.latitude_deg, t.longitude_deg, sx, sy, range_km);
+        if (range_km > range_km_) continue;  // Off-range: no tag to place.
+
+        TagLabel* slot = AcquireLabel(t.icao_address);
+        if (slot == nullptr) continue;
+        slot->last_seen_ms = now_ms_;
+
+        // Preferred orbit angle: beside the aircraft, perpendicular to its heading (see
+        // TagSideAngle). Without a heading, fall back to radially outward from the radar center.
+        float pref_angle;
+        if (t.direction_valid) {
+            pref_angle = TagSideAngle(t.direction_deg * kDegToRad, sx, sy);
+        } else {
+            pref_angle = atan2f(sy - kCenterY, sx - kCenterX);
+        }
+        if (!slot->valid) {
+            slot->angle_rad = pref_angle;
+            slot->valid = true;
+        }
+
+        // Approximate the block size from character/line counts (no canvas here to measure). The
+        // widest line is the callsign, category (<=3 ch) or altitude (up to "-NNNNNft").
+        size_t max_chars = (t.callsign[0] != '\0' && t.callsign[0] != '?') ? strlen(t.callsign) : 1;
+        int lines = 1;
+        if (t.category[0] != '\0') {
+            lines++;
+            if (strlen(t.category) > max_chars) max_chars = strlen(t.category);
+        }
+        if (t.geom_altitude_valid) {
+            lines++;
+            if (max_chars < 7) max_chars = 7;
+        }
+        const float w = max_chars * kFontCharWpx;
+        const float h = lines * kFontLineHpx;
+
+        work[n].slot = slot;
+        work[n].px = sx;
+        work[n].py = sy;
+        work[n].thw = 0.5f * w;
+        work[n].thh = 0.5f * h;
+        work[n].r = TagOrbitRadius(slot->angle_rad, work[n].thw, work[n].thh, kTagOrbitClearPx);
+        work[n].hw = 0.5f * w + kTagSymbolPadPx;
+        work[n].hh = 0.5f * h + kTagSymbolPadPx;
+        work[n].pref_angle = pref_angle;
+        n++;
+    }
+    if (n == 0) return;
+
+    // Force-directed relaxation: each label may move only along its orbit circle (angle is the sole
+    // degree of freedom). Take the tangential component of the net repulsion, add a spring toward
+    // the preferred (beside) angle, and step the angle -- clamped per iteration so labels ease around
+    // instead of snapping.
+    float cx[kMaxTags], cy[kMaxTags];
+    for (int iter = 0; iter < kTagRelaxIters; iter++) {
+        // Current label-center positions for this iteration. The orbit radius is re-derived from the
+        // current angle so the box keeps hugging the symbol as the label swivels around it.
+        for (int i = 0; i < n; i++) {
+            work[i].r =
+                TagOrbitRadius(work[i].slot->angle_rad, work[i].thw, work[i].thh, kTagOrbitClearPx);
+            cx[i] = work[i].px + cosf(work[i].slot->angle_rad) * work[i].r;
+            cy[i] = work[i].py + sinf(work[i].slot->angle_rad) * work[i].r;
+        }
+        for (int i = 0; i < n; i++) {
+            float fx = 0.0f, fy = 0.0f;
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                AddRepulsion(fx, fy, cx[i] - cx[j], cy[i] - cy[j], kTagLabelRepel);   // vs. labels
+                AddRepulsion(fx, fy, cx[i] - work[j].px, cy[i] - work[j].py, kTagSymbolRepel);  // vs. symbols
+                // Hard eject: separate overlapping label boxes (combined half-extents = AABB test).
+                AddBoxEject(fx, fy, cx[i] - cx[j], cy[i] - cy[j], work[i].hw + work[j].hw,
+                            work[i].hh + work[j].hh, kTagLabelEject);
+                // Hard eject: if aircraft j's symbol falls inside this label's box, shove it clear.
+                AddBoxEject(fx, fy, cx[i] - work[j].px, cy[i] - work[j].py, work[i].hw, work[i].hh,
+                            kTagSymbolEject);
+            }
+            // Keep labels inside the round bezel: push inward once past the rim margin.
+            const float dcx = cx[i] - kCenterX, dcy = cy[i] - kCenterY;
+            const float rr = sqrtf(dcx * dcx + dcy * dcy);
+            const float over = rr - (kRadiusPx - kTagRimMarginPx);
+            if (over > 0.0f && rr > 0.01f) {
+                fx -= kTagRimRepel * over * (dcx / rr);
+                fy -= kTagRimRepel * over * (dcy / rr);
+            }
+            // Tangent to the orbit (perpendicular to the radius) at the current angle.
+            const float angle = work[i].slot->angle_rad;
+            const float tx = -sinf(angle);
+            const float ty = cosf(angle);
+            float dtheta = (fx * tx + fy * ty) / work[i].r * kTagStepGain;
+            // Spring toward the beside-the-aircraft (preferred) angle, via the shortest signed delta.
+            const float da = work[i].pref_angle - angle;
+            dtheta += kTagSidePull * atan2f(sinf(da), cosf(da));
+            if (dtheta > kTagMaxStepRad) dtheta = kTagMaxStepRad;
+            if (dtheta < -kTagMaxStepRad) dtheta = -kTagMaxStepRad;
+            work[i].slot->angle_rad += dtheta;
+        }
+    }
+}
+
 void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
     // Geometry below is computed in absolute scene coordinates; oy is applied only at the final
     // draw calls so banded rendering (see SetOriginY) lands each strip correctly.
@@ -386,34 +617,75 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
         gfx->fillSmoothCircle(ix, iy - oy, 3, kColorTarget);
     }
 
-    // Stacked tag, offset up-right from the target: callsign (white), then emitter category
-    // (cyan) and altitude in feet (yellow) below it. Lines that have no data are skipped so
-    // they leave no gap.
+    // Stacked tag orbiting the target: callsign (white), then emitter category (cyan) and altitude
+    // in feet (yellow) below it. Lines with no data are skipped so they leave no gap. The block's
+    // orbit angle around the symbol was chosen by LayoutTags (force-directed repulsion) so clustered
+    // aircraft fan out; here we just read that angle back by ICAO and center the block on the orbit
+    // point. All geometry is in absolute scene coords; oy is applied only at the draw calls.
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::top_left);
-    const int16_t tag_x = ix + 5;
-    int16_t tag_y = iy - 3 - oy;
     const int16_t line_h = gfx->fontHeight();
-    char tag[24];
+
+    // Collect the lines to draw (up to 3) with their colors, then measure the block.
+    struct TagLine {
+        const char* s;
+        uint16_t color;
+    } lines[3];
+    int n_lines = 0;
+    char alt_buf[16];
 
     // Line 1: callsign, or "?" when none is known.
-    const char* cs = (target.callsign[0] != '\0' && target.callsign[0] != '?') ? target.callsign : "";
-    gfx->setTextColor(kColorTargetTag);  // White callsign.
-    gfx->drawString(cs[0] != '\0' ? cs : "?", tag_x, tag_y);
-    tag_y += line_h;
+    const char* cs = (target.callsign[0] != '\0' && target.callsign[0] != '?') ? target.callsign : "?";
+    lines[n_lines++] = {cs, kColorTargetTag};  // White callsign.
 
     // Line 2: emitter category abbreviation (only when known).
     if (target.category[0] != '\0') {
-        gfx->setTextColor(kColorTargetCat);  // Cyan category.
-        gfx->drawString(target.category, tag_x, tag_y);
-        tag_y += line_h;
+        lines[n_lines++] = {target.category, kColorTargetCat};  // Cyan category.
     }
 
     // Line 3: geometric (GNSS) altitude in feet (only when valid, to avoid a false "0ft").
     if (target.geom_altitude_valid) {
-        snprintf(tag, sizeof(tag), "%dft", static_cast<int>(target.geom_altitude_ft));
-        gfx->setTextColor(kColorTargetAlt);  // Yellow altitude.
-        gfx->drawString(tag, tag_x, tag_y);
+        snprintf(alt_buf, sizeof(alt_buf), "%dft", static_cast<int>(target.geom_altitude_ft));
+        lines[n_lines++] = {alt_buf, kColorTargetAlt};  // Yellow altitude.
+    }
+
+    int16_t block_w = 0;
+    for (int i = 0; i < n_lines; i++) {
+        const int16_t w = gfx->textWidth(lines[i].s);
+        if (w > block_w) block_w = w;
+    }
+    const int16_t block_h = static_cast<int16_t>(n_lines * line_h);
+
+    // Orbit angle from the layout pass. If this target was not laid out (e.g. the label table was
+    // full this frame), fall back to the same preferred angle LayoutTags would seed: beside the
+    // heading when known, else radially outward. Orbit radius clears the triangle at every angle.
+    const TagLabel* lbl = FindLabel(target.icao_address);
+    float angle;
+    if (lbl != nullptr && lbl->valid) {
+        angle = lbl->angle_rad;
+    } else if (target.direction_valid) {
+        angle = TagSideAngle(target.direction_deg * kDegToRad, static_cast<float>(ix),
+                             static_cast<float>(iy));
+    } else {
+        angle = atan2f(iy - kCenterY, ix - kCenterX);
+    }
+    const float orbit_r =
+        TagOrbitRadius(angle, 0.5f * block_w, 0.5f * block_h, kTagOrbitClearPx);
+
+    // Center the block on the orbit point, then clamp to the panel so it never clips off-screen.
+    int16_t tag_x = static_cast<int16_t>(ix + cosf(angle) * orbit_r - block_w * 0.5f);
+    int16_t tag_y = static_cast<int16_t>(iy + sinf(angle) * orbit_r - block_h * 0.5f);
+    if (tag_x < 0) tag_x = 0;
+    if (tag_y < 0) tag_y = 0;
+    if (tag_x + block_w > kScreenWidth) tag_x = kScreenWidth - block_w;
+    if (tag_y + block_h > kScreenHeight) tag_y = kScreenHeight - block_h;
+
+    // Draw the lines from the block's top-left, applying the band offset only now.
+    int16_t draw_y = tag_y - oy;
+    for (int i = 0; i < n_lines; i++) {
+        gfx->setTextColor(lines[i].color);
+        gfx->drawString(lines[i].s, tag_x, draw_y);
+        draw_y += line_h;
     }
 }
 

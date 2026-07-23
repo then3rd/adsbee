@@ -95,6 +95,16 @@ class Display {
     int16_t band_height_ = 0;
     RadarView radar_;
 
+    // Snapshot of this frame's plottable targets, gathered once per frame in Update() before the
+    // banded render loop. The tag layout (RadarView::LayoutTags) needs every aircraft position up
+    // front, and each band re-draws the same set, so we collect once here rather than re-iterating
+    // the dictionary per band. Sized above RadarView::kMaxTags so that when more aircraft are in
+    // range than get managed labels, the extras still draw as symbols (with a fallback tag angle)
+    // rather than vanishing.
+    static constexpr int kMaxFrameTargets = 24;
+    RadarTarget frame_targets_[kMaxFrameTargets];
+    int frame_target_count_ = 0;
+
     bool initialized_ = false;
     uint32_t last_frame_timestamp_ms_ = 0;
 };
