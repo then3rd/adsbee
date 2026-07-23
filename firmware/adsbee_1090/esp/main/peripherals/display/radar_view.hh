@@ -9,6 +9,7 @@
 // (see large_airports.hh) are ported likewise. MIT->GPL-3.0 reuse is permitted with attribution.
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 // Forward-declare LovyanGFX's base canvas type so this header stays light (no LovyanGFX
@@ -60,6 +61,9 @@ class RadarView {
         if (latitude_deg != center_lat_deg_ || longitude_deg != center_lon_deg_) {
             center_lat_deg_ = latitude_deg;
             center_lon_deg_ = longitude_deg;
+            // Cache the longitude-scale cosine so LatLonToScreen (called per point, per band) does
+            // not recompute the same cosf for every projection. cosf(deg * pi/180).
+            cos_center_lat_ = cosf(latitude_deg * 0.017453292519943295f);
             airports_dirty_ = true;
         }
     }
@@ -136,35 +140,38 @@ class RadarView {
     void RefreshVisibleAirports();
 
     // ---- Aircraft position trails ----
-    // How long a trail is retained is a time window (kTrailRetentionMin). The ring buffer is
-    // sized from that window and the sample spacing, and both per-point pruning and whole-trail
-    // expiry are driven by wall-clock age, not by a raw sample count.
+    // The retention window is expressed in minutes (kTrailRetentionMin). Points are appended at
+    // roughly kTrailSampleMs spacing, so the ring-buffer depth (kTrailLen) sized from those two
+    // constants IS the time window: the oldest breadcrumb rolls out after ~kTrailRetentionMin.
     //
-    // Memory note: this table lives in static SRAM (no PSRAM on this board) and competes with the
-    // banded-render strip buffer and WiFi/lwIP/TLS. Total footprint is
-    // kMaxTrails * kTrailLen * 12 bytes; keep it near ~10 KB so the strip buffer can still
-    // allocate (otherwise rendering falls back to flickery direct-to-panel draw). To lengthen the
-    // window, prefer raising kTrailSampleMs (coarser breadcrumbs) over growing the point count.
+    // Memory note: this table lives in static SRAM (no PSRAM on this board) and competes directly
+    // with the banded-render strip buffer AND the WiFi/lwIP/TLS heap the web UI needs when a
+    // client connects. Every byte here is permanent pressure on that peak. Footprint is
+    // kMaxTrails * kTrailLen * 8 bytes; keep it small (~5 KB). To lengthen the window, prefer
+    // raising kTrailSampleMs (coarser breadcrumbs) over growing the point count or trail count.
     static constexpr int kMaxTrails = 16;              // Aircraft tracked simultaneously.
     static constexpr uint32_t kTrailRetentionMin = 5;  // Minutes of history to retain per trail.
-    static constexpr uint32_t kTrailSampleMs = 6000;   // Min spacing between samples.
+    static constexpr uint32_t kTrailSampleMs = 8000;   // Min spacing between samples.
+    // If an aircraft goes unseen longer than this (several missed samples), its buffered points are
+    // stale: connecting them to the position after the gap would draw a false straight chord across
+    // airspace it never crossed. Past this gap the trail is reset and restarts from the new point.
+    static constexpr uint32_t kTrailGapResetMs = kTrailSampleMs * 3;
     static constexpr uint32_t kTrailRetentionMs = kTrailRetentionMin * 60u * 1000u;
-    // Ring-buffer depth needed to cover the retention window at the sample rate (+1 slack).
-    static constexpr int kTrailLen = static_cast<int>(kTrailRetentionMs / kTrailSampleMs) + 1;
+    // Ring-buffer depth that covers the retention window at the sample rate; also bounds memory.
+    static constexpr int kTrailLen = static_cast<int>(kTrailRetentionMs / kTrailSampleMs);
     static constexpr uint32_t kTrailExpiryMs = kTrailRetentionMs;  // Drop a trail unseen this long.
 
-    // Per-aircraft breadcrumb ring buffer. Stores lat/lon (not screen coords) so trails
-    // re-project correctly when the range or center changes, plus a per-point timestamp so old
-    // points fall out of the retention window by age.
+    // Per-aircraft breadcrumb ring buffer. Stores only lat/lon (not screen coords, so trails
+    // re-project when range/center change; no per-point timestamp -- the fixed-depth ring bounds
+    // history to the window, keeping the table small).
     struct Trail {
         uint32_t icao = 0;             // 0 = empty slot.
         uint32_t last_seen_ms = 0;     // Frame time this aircraft was last recorded (for expiry).
         uint32_t last_sample_ms = 0;   // Time the most recent point was appended (for sampling).
         uint8_t count = 0;             // Valid points in the ring buffer.
-        uint8_t head = 0;              // Next-write index into lat[]/lon[]/t[].
+        uint8_t head = 0;              // Next-write index into lat[]/lon[].
         float lat[kTrailLen];
         float lon[kTrailLen];
-        uint32_t t[kTrailLen];         // Sample time of each point (for age-based pruning).
     };
 
     // Append the aircraft's current position to its trail, throttled to kTrailSampleMs. Allocates
@@ -174,6 +181,7 @@ class RadarView {
     const Trail* FindTrail(uint32_t icao) const;
 
     float center_lat_deg_ = 0.0f;
+    float cos_center_lat_ = 1.0f;  // cos(center_lat); cached by SetCenter for LatLonToScreen.
     float center_lon_deg_ = 0.0f;
     float range_km_ = kDefaultRangeKm;
     int16_t origin_y_ = 0;  // Subtracted from every drawn y (banded rendering); see SetOriginY.

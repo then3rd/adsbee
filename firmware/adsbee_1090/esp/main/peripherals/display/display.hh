@@ -27,11 +27,28 @@ class Display {
     //
     // The block available at Init() time varies with how fragmented the heap is when the display
     // comes up, so rather than commit to one height (and collapse to the flickering direct-draw
-    // path when it does not fit), Init() tries these in order and keeps the first that allocates.
-    // 40 rows is 240*40*2 = ~19 KB (6 bands); the smaller fallbacks trade more bands (redraw cost,
-    // negligible at ~5 Hz) for a smaller contiguous block: 20 rows = ~9.6 KB, 10 rows = ~4.8 KB.
-    // Every entry MUST evenly divide RadarView::kScreenHeight (240).
-    static constexpr int16_t kBandHeightCandidates[] = {40, 20, 16, 10, 8};
+    // path when it does not fit), Init() tries these in order and keeps the first that allocates
+    // AND still leaves kMinFreeHeapAfterStripBytes for the network stack (see Init()).
+    //
+    // Heights are deliberately capped small: the web UI (HTTPS + WebSocket) allocates a large
+    // transient working set when a client connects -- a peak that happens long after Init(), when
+    // this strip is already resident. A big strip (e.g. 40 rows = ~19 KB) survives boot but starves
+    // that later peak and OOMs the web server. A short strip just means more bands per frame
+    // (redraw cost, negligible at ~5 Hz) while keeping flicker-free 16-bit color. 10 rows = ~4.8 KB
+    // (24 bands), 8 rows = ~3.8 KB (30 bands). The reserve check below cannot see the *later* web-UI
+    // peak (the heap is near-empty of connections at Init), so this hard cap -- not the reserve --
+    // is what bounds the strip. Every entry MUST evenly divide RadarView::kScreenHeight (240).
+    static constexpr int16_t kBandHeightCandidates[] = {10, 8};
+
+    // Preferred minimum internal heap (bytes) to leave free after allocating the strip, so WiFi/
+    // lwIP/TLS and the web UI keep headroom. This is only a *preference*: Init() picks the largest
+    // candidate that still leaves this much free, but if none does it falls back to the SMALLEST
+    // candidate that allocates rather than to flickery direct-draw -- a ~3.8 KB strip is cheap and
+    // flicker-free rendering matters more. Measured boot-time free heap is ~42 KB (see the "Heap
+    // before strip alloc" log), so this must sit below ~38 KB or the smallest strip is never
+    // "preferred". 30 KB keeps ~7-8 KB of slack above the smallest strip. Direct-draw happens only
+    // if even the smallest strip fails to allocate at all.
+    static constexpr uint32_t kMinFreeHeapAfterStripBytes = 30u * 1024u;
 
     // How long the boot splash (ADSBee logo) stays on screen before the radar view takes over.
     static constexpr uint32_t kSplashDurationMs = 3000;

@@ -153,7 +153,7 @@ void RadarView::LatLonToScreen(float latitude_deg, float longitude_deg, float& o
     // is the fix for the known Plane-Radar bug (it omits the cosine and is only correct near
     // the receiver's meridian).
     float dy_km = (latitude_deg - center_lat_deg_) * kKmPerDegLat;
-    float dx_km = (longitude_deg - center_lon_deg_) * kKmPerDegLat * cosf(center_lat_deg_ * kDegToRad);
+    float dx_km = (longitude_deg - center_lon_deg_) * kKmPerDegLat * cos_center_lat_;
 
     out_range_km = sqrtf(dx_km * dx_km + dy_km * dy_km);
 
@@ -211,7 +211,8 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
     // background-filled pad can break the green grid where the text sits (avoids overlap).
     char scale_buf[16];
     snprintf(scale_buf, sizeof(scale_buf), "%dkm", static_cast<int>(range_km_ + 0.5f));
-    const int16_t lx = kCenterX + (kRadiusPx * 3) / kRingCount;  // 2nd ring from outside, +X axis.
+    // 2nd ring from outside (radius = kRadiusPx * (kRingCount-1)/kRingCount), on the +X axis.
+    const int16_t lx = kCenterX + (kRadiusPx * (kRingCount - 1)) / kRingCount;
     const int16_t ly = kCenterY;
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::middle_center);
@@ -274,13 +275,20 @@ void RadarView::RecordTrail(uint32_t icao, float lat, float lon) {
 
     slot->last_seen_ms = now_ms_;
 
+    // Reception gap: if we missed several samples, the buffered points are stale and connecting
+    // them to the new position would draw a false straight line across the gap. Drop the old trail
+    // and restart from the current point (the fixed ring depth otherwise has no per-point age).
+    if (slot->count != 0 && now_ms_ - slot->last_sample_ms > kTrailGapResetMs) {
+        slot->count = 0;
+        slot->head = 0;
+    }
+
     // Throttle how often points are appended so the trail spans a useful time window.
     if (slot->count != 0 && now_ms_ - slot->last_sample_ms < kTrailSampleMs) {
         return;
     }
     slot->lat[slot->head] = lat;
     slot->lon[slot->head] = lon;
-    slot->t[slot->head] = now_ms_;
     slot->head = (slot->head + 1) % kTrailLen;
     if (slot->count < kTrailLen) slot->count++;
     slot->last_sample_ms = now_ms_;
@@ -301,19 +309,15 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
         RecordTrail(target.icao_address, target.latitude_deg, target.longitude_deg);
     }
 
-    // Draw the position trail as the bottom layer: thin faint polyline through the samples still
-    // inside the retention window, clipped to the outer ring. Re-projected each frame so it
-    // tracks range/center; points older than kTrailRetentionMs are skipped (break the polyline).
+    // Draw the position trail as the bottom layer: thin faint polyline through the retained
+    // breadcrumbs (the ring depth bounds them to the retention window), clipped to the outer
+    // ring. Re-projected each frame so it tracks range/center changes.
     if (const Trail* trail = FindTrail(target.icao_address)) {
         constexpr int32_t kRadiusSq = static_cast<int32_t>(kRadiusPx) * kRadiusPx;
         bool have_prev = false;
         int16_t prev_x = 0, prev_y = 0;
         for (int i = 0; i < trail->count; i++) {
             int idx = (trail->head - trail->count + i + kTrailLen) % kTrailLen;
-            if (now_ms_ - trail->t[idx] > kTrailRetentionMs) {
-                have_prev = false;  // Too old: don't connect across the gap.
-                continue;
-            }
             float px, py, unused_range;
             LatLonToScreen(trail->lat[idx], trail->lon[idx], px, py, unused_range);
             int16_t cx = static_cast<int16_t>(px + 0.5f);

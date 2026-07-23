@@ -11,6 +11,7 @@
 #include "adsbee_server.hh"        // adsbee_server, AircraftDictionary
 #include "aircraft_dictionary.hh"  // ModeSAircraft, UATAircraft, get_if, HasBitFlag
 #include "comms.hh"                // CONSOLE_* logging (tunnels to the RP2040 console for visibility).
+#include "esp_heap_caps.h"         // heap_caps_get_free_size / _largest_free_block (strip sizing)
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"       // vTaskDelay, pdMS_TO_TICKS
 #include "hal.hh"                // get_time_since_boot_ms()
@@ -107,21 +108,68 @@ bool Display::Init() {
             return true;
         }(),
         "every band height candidate must evenly divide screen height");
+
+    // PSRAM probe: MALLOC_CAP_SPIRAM heap is only registered if CONFIG_SPIRAM is enabled AND the
+    // module actually has a PSRAM die that initialized at boot. total>0 => PSRAM present and usable
+    // (in which case trails / a full framebuffer / WiFi buffers could move off internal SRAM);
+    // total==0 => no PSRAM detected in the current mode (absent, or an octal module probed in quad
+    // mode). See the boot log for the ESP-IDF "SPIRAM" init line as well.
+    CONSOLE_INFO(kTag, "PSRAM probe: total=%u bytes, free=%u bytes.",
+                 static_cast<unsigned>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+
+    // Log the heap budget up front so the strip size / kMinFreeHeapAfterStripBytes can be tuned
+    // against real numbers if the web UI still runs out of memory on connect.
+    CONSOLE_INFO(kTag, "Heap before strip alloc: free=%u, largest block=%u.",
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
+
+    // Pick a strip height, largest first. Prefer the largest that still leaves the preferred
+    // reserve free; but smaller strips leave MORE free, so if none meets the reserve we keep the
+    // SMALLEST candidate that allocates -- a tiny strip is only a few KB and stays flicker-free,
+    // which beats dropping to direct-to-panel draw. Direct-draw is used only if even the smallest
+    // strip can't allocate at all.
+    constexpr size_t kNumCandidates = sizeof(kBandHeightCandidates) / sizeof(kBandHeightCandidates[0]);
     band_ = new LGFX_Sprite(&lcd_);
     band_->setColorDepth(16);
-    for (int16_t candidate : kBandHeightCandidates) {
-        if (band_->createSprite(RadarView::kScreenWidth, candidate) != nullptr) {
-            band_height_ = candidate;
+    // Track the smallest height that actually allocated but fell under the reserve, so if no height
+    // meets the reserve we can fall back to it (flicker-free beats direct-draw) WITHOUT having bet
+    // on a smaller allocation that might not succeed. Freeing an under-reserve strip before trying
+    // smaller is safe to re-create later: the heap is at least as free as when it first allocated.
+    int16_t fallback_height = 0;
+    for (size_t i = 0; i < kNumCandidates; i++) {
+        const int16_t candidate = kBandHeightCandidates[i];
+        if (band_->createSprite(RadarView::kScreenWidth, candidate) == nullptr) {
+            continue;  // Too large to allocate at all right now; try a shorter strip.
+        }
+        const uint32_t free_after = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        if (free_after >= kMinFreeHeapAfterStripBytes) {
+            band_height_ = candidate;  // Meets the reserve: keep this sprite.
+            CONSOLE_INFO(kTag, "Strip buffer: %d rows (%d bands), heap free after=%u.", candidate,
+                         RadarView::kScreenHeight / candidate, static_cast<unsigned>(free_after));
             break;
         }
+        // Allocated but under the reserve. A smaller candidate leaves more free, so prefer it --
+        // remember this height as a fallback and give the sprite back before trying smaller.
+        fallback_height = candidate;
+        CONSOLE_WARNING(kTag, "Strip %d rows leaves only %u free (< %u reserve); trying smaller.",
+                        candidate, static_cast<unsigned>(free_after),
+                        static_cast<unsigned>(kMinFreeHeapAfterStripBytes));
+        band_->deleteSprite();
+    }
+    // No height met the reserve, but at least one allocated: re-create the smallest such height
+    // (guaranteed to fit now -- the heap is at least as free as when it allocated during the loop)
+    // rather than dropping to flickery direct-draw.
+    if (band_height_ == 0 && fallback_height != 0 &&
+        band_->createSprite(RadarView::kScreenWidth, fallback_height) != nullptr) {
+        band_height_ = fallback_height;
+        CONSOLE_WARNING(kTag, "Strip buffer: %d rows below reserve -- using it (flicker-free beats direct draw).",
+                        fallback_height);
     }
     if (band_height_ == 0) {
-        CONSOLE_WARNING(kTag, "Strip buffer alloc failed at every height; direct panel draw (may flicker).");
+        CONSOLE_WARNING(kTag, "No strip height could allocate; direct panel draw (may flicker).");
         delete band_;
         band_ = nullptr;
-    } else {
-        CONSOLE_INFO(kTag, "Strip buffer allocated at %d rows (%d bands).", band_height_,
-                     RadarView::kScreenHeight / band_height_);
     }
 
     ShowSplash();
