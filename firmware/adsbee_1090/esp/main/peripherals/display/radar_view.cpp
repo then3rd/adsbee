@@ -206,21 +206,28 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
     }
     gfx->setTextSize(1);
 
-    // Range scale label (outer ring range in km), placed on the east X axis over the
-    // 2nd-from-outside ring so it reads left of the "E". Drawn after the rings/crosshairs so a
-    // background-filled pad can break the green grid where the text sits (avoids overlap).
-    char scale_buf[16];
-    snprintf(scale_buf, sizeof(scale_buf), "%dkm", static_cast<int>(range_km_ + 0.5f));
-    // 2nd ring from outside (radius = kRadiusPx * (kRingCount-1)/kRingCount), on the +X axis.
-    const int16_t lx = kCenterX + (kRadiusPx * (kRingCount - 1)) / kRingCount;
-    const int16_t ly = kCenterY;
+    // Range scale labels (km at each ring), placed along the 45-degree (NE) diagonal, centered
+    // over each ring line. The outermost ring shows the full range_km_; inner rings show their
+    // proportional fraction. Drawn after the rings/crosshairs so a background-filled pad can break
+    // the green grid where each label sits (avoids overlap). The 45-degree radial keeps them off
+    // the crosshairs and clear of the cardinal labels.
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::middle_center);
-    const int16_t tw = gfx->textWidth(scale_buf);
-    const int16_t th = gfx->fontHeight();
-    gfx->fillRect(lx - tw / 2 - 2, ly - th / 2 - 1 - oy, tw + 4, th + 2, kColorBackground);
     gfx->setTextColor(kColorRange);
-    gfx->drawString(scale_buf, lx, ly - oy);
+    // Unit vector along the NE diagonal (+x right, -y up): cos/sin of 45 degrees.
+    constexpr float kDiag = 0.70710678f;
+    for (int i = 1; i <= kRingCount; i++) {
+        const int16_t ring_radius = (kRadiusPx * i) / kRingCount;
+        char scale_buf[16];
+        snprintf(scale_buf, sizeof(scale_buf), "%dkm",
+                 static_cast<int>(range_km_ * i / kRingCount + 0.5f));
+        const int16_t lx = kCenterX + static_cast<int16_t>(ring_radius * kDiag);
+        const int16_t ly = kCenterY - static_cast<int16_t>(ring_radius * kDiag);
+        const int16_t tw = gfx->textWidth(scale_buf);
+        const int16_t th = gfx->fontHeight();
+        gfx->fillRect(lx - tw / 2 - 2, ly - th / 2 - 1 - oy, tw + 4, th + 2, kColorBackground);
+        gfx->drawString(scale_buf, lx, ly - oy);
+    }
 
     if (!position_valid) {
         gfx->setTextColor(kColorAcquiring);
