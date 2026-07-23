@@ -1,1 +1,3 @@
 websockets>=12.0
+# Pillow: used by firmware/scripts/gen_splash_image.py to generate the GC9A01 boot-splash image.
+Pillow>=10.0

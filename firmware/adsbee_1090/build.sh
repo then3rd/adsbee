@@ -40,8 +40,27 @@ check_esp_idf_version() {
     fi
 }
 
+# Generate the GC9A01 boot-splash C array from images/adsbee_logo.png. Runs on the host because
+# the ESP-IDF container has no Pillow. The generated esp/main/peripherals/display/splash_data.{hh,cpp}
+# are gitignored build artifacts that display.cpp #includes; regenerating every ESP build means a
+# changed PNG (or ZOOM in the script) is always picked up. See firmware/README.md.
+generate_splash() {
+    local gen="$script_dir/../scripts/gen_splash_image.py"
+    local venv_py="$script_dir/../../.venv/bin/python3"
+    local py="python3"
+    [ -x "$venv_py" ] && py="$venv_py"
+    echo "=== Generating boot-splash image data ==="
+    if ! "$py" -c "import PIL" 2>/dev/null; then
+        echo "ERROR: Pillow (PIL) is required to generate the boot-splash image but is not available to '$py'."
+        echo "       Install it with 'just flash-deps' (or 'pip install Pillow') and re-run the build."
+        exit 1
+    fi
+    "$py" "$gen"
+}
+
 build_esp() {
     check_esp_idf_version
+    generate_splash
     if [ "$debug" = true ]; then
         echo "=== Building ESP32-S3 firmware (Debug) ==="
         # sdkconfig_debug is auto-generated on first run by layering sdkconfig.debug on top of sdkconfig.

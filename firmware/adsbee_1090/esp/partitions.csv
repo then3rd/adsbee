@@ -1,0 +1,10 @@
+# Release partition table. Based on ESP-IDF's partitions_singleapp_large.csv, but the factory
+# app partition is grown from 1500K to 2048K: the base app already sat at ~97% of 1500K, and the
+# GC9A01 boot splash (a ~115 KB embedded RGB565 image) pushed it over. The chip is 8 MB with no
+# ESP32-side OTA slots (updates reflash the whole RP2040 combined image), so there is ample unused
+# flash above factory (0x210000) and this only raises the ceiling -- the flashed binary stays its
+# actual size.
+# Name,   Type, SubType,  Offset,  Size,   Flags
+nvs,      data, nvs,      ,        0x6000,
+phy_init, data, phy,      ,        0x1000,
+factory,  app,  factory,  ,        2048K,

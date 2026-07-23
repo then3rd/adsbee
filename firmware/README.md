@@ -38,6 +38,19 @@ The build system uses Docker Compose with three pre-built containers — no loca
 
 The compose file lives at `firmware/adsbee_1090/compose.yml`. The build script handles the required build order (ESP32 → CC1312 → RP2040) automatically.
 
+### Generated boot-splash image
+
+The GC9A01 round display shows the ADSBee logo (`images/adsbee_logo.png`) for a few seconds on boot. The image is compiled into the ESP32 firmware as an RGB565 C array in `esp/main/peripherals/display/splash_data.{hh,cpp}`.
+
+These two files are **generated build artifacts** — they are gitignored and regenerated automatically on every ESP32 build by `firmware/scripts/gen_splash_image.py` (invoked from `build.sh`). Generation runs on the **host** (the ESP-IDF container has no Pillow), so it requires Pillow:
+
+```bash
+just flash-deps        # installs Pillow (and other Python deps) into .venv
+# or: pip install Pillow
+```
+
+To change how the logo is framed, edit the `ZOOM` constant near the top of `gen_splash_image.py` (higher = bee larger / more cropped, lower = smaller / more of the logo visible) and rebuild. No manual generation step is needed — the build picks up PNG or `ZOOM` changes automatically.
+
 ---
 
 ## Building Firmware

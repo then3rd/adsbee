@@ -8,12 +8,15 @@
 #include <cstring>
 #include <variant>
 
-#include "adsbee_server.hh"       // adsbee_server, AircraftDictionary
+#include "adsbee_server.hh"        // adsbee_server, AircraftDictionary
 #include "aircraft_dictionary.hh"  // ModeSAircraft, UATAircraft, get_if, HasBitFlag
 #include "comms.hh"                // CONSOLE_* logging (tunnels to the RP2040 console for visibility).
-#include "hal.hh"                  // get_time_since_boot_ms()
-#include "object_dictionary.hh"    // object_dictionary, RxPosition
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"       // vTaskDelay, pdMS_TO_TICKS
+#include "hal.hh"                // get_time_since_boot_ms()
+#include "object_dictionary.hh"  // object_dictionary, RxPosition
 #include "settings.hh"
+#include "splash_data.hh"  // data::splash::kImage / kWidth / kHeight
 
 static const char* kTag = "Display";
 
@@ -63,12 +66,28 @@ bool Display::Init() {
         band_ = nullptr;
     }
 
+    ShowSplash();
+
     // Draw the initial background so the panel shows something before the first aircraft arrive.
     RenderFrame(false);
 
     initialized_ = true;
     CONSOLE_INFO(kTag, "GC9A01 display initialized (%s rendering).", band_ ? "banded" : "direct");
     return true;
+}
+
+void Display::ShowSplash() {
+    lcd_.fillScreen(0x0000);
+    // The embedded array is native-endian RGB565; the panel's SPI bus wants the bytes swapped, so
+    // without this the high/low bytes invert (e.g. yellow reads as blue/purple). Only pushImage()
+    // honors this flag -- the radar view draws with color primitives, which are unaffected -- so
+    // it is safe to leave set. Drawing straight to the panel is fine here: this is a one-shot draw
+    // (not a per-frame redraw), so there is no flicker to avoid.
+    lcd_.setSwapBytes(true);
+    lcd_.pushImage((RadarView::kScreenWidth - data::splash::kWidth) / 2,
+                   (RadarView::kScreenHeight - data::splash::kHeight) / 2, data::splash::kWidth, data::splash::kHeight,
+                   data::splash::kImage);
+    vTaskDelay(pdMS_TO_TICKS(kSplashDurationMs));
 }
 
 bool Display::ResolveCenter() {

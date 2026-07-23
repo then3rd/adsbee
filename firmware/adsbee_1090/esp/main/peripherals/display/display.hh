@@ -27,10 +27,14 @@ class Display {
     // free block with margin. Must evenly divide RadarView::kScreenHeight.
     static constexpr int16_t kBandHeight = 40;
 
+    // How long the boot splash (ADSBee logo) stays on screen before the radar view takes over.
+    static constexpr uint32_t kSplashDurationMs = 3000;
+
     /**
      * Initialize the display: bring up the panel over SPI3, allocate the off-screen sprite (or
-     * fall back to direct-to-panel drawing if the ~115 KB allocation fails), and draw the
-     * initial background. Must be called once at startup.
+     * fall back to direct-to-panel drawing if the ~115 KB allocation fails), show the boot splash
+     * for kSplashDurationMs, and draw the initial radar background. Must be called once at
+     * startup. Blocks for kSplashDurationMs; safe to call from app_main() before the main loop.
      * @retval True if the panel initialized, false otherwise. A sprite allocation failure is
      *         not a failure (direct draw is used instead).
      */
@@ -43,6 +47,10 @@ class Display {
     void Update();
 
    private:
+    // Draw the embedded ADSBee logo centered on the panel and hold it for kSplashDurationMs.
+    // Blocking (vTaskDelay); called once from Init() before the radar view starts rendering.
+    void ShowSplash();
+
     // Whether a valid receiver center position is currently available.
     bool ResolveCenter();
 
