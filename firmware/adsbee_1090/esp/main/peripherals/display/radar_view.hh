@@ -62,6 +62,16 @@ class RadarView {
     void SetRangeKm(float range_km) { range_km_ = range_km; }
 
     /**
+     * Set a vertical render offset (in pixels) subtracted from every drawn y coordinate.
+     * Used for banded rendering: to draw the horizontal strip [y0, y0+H) of the full 240x240
+     * scene into a small H-tall sprite, set origin_y = y0 so absolute scene coordinates land in
+     * the sprite's local space (off-strip pixels are clipped by the sprite bounds). Leave at 0
+     * to draw at absolute coordinates (full-frame / direct draw). Projection geometry is always
+     * computed in absolute coordinates; the offset is applied only at the final draw call.
+     */
+    void SetOriginY(int16_t origin_y) { origin_y_ = origin_y; }
+
+    /**
      * Draw the static radar background (rings, crosshairs, cardinal labels) onto the canvas.
      * Call once per frame before drawing targets. Clears the canvas.
      * @param[in] gfx Canvas to draw onto (an LGFX device or an off-screen sprite).
@@ -88,4 +98,5 @@ class RadarView {
     float center_lat_deg_ = 0.0f;
     float center_lon_deg_ = 0.0f;
     float range_km_ = kDefaultRangeKm;
+    int16_t origin_y_ = 0;  // Subtracted from every drawn y (banded rendering); see SetOriginY.
 };

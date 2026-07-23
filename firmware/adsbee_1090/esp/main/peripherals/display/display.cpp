@@ -48,24 +48,26 @@ bool Display::Init() {
     lcd_.setRotation(0);
     lcd_.fillScreen(0x0000);
 
-    // Off-screen double buffer for flicker-free rendering. There is no PSRAM, so this ~115 KB
-    // (240*240*2) allocation competes with WiFi/lwIP/TLS and the AircraftDictionary in internal
-    // SRAM. If it fails we fall back to drawing directly to the panel (acceptable at 5-10 Hz).
-    canvas_ = new LGFX_Sprite(&lcd_);
-    canvas_->setColorDepth(16);
-    if (canvas_->createSprite(RadarView::kScreenWidth, RadarView::kScreenHeight) == nullptr) {
-        CONSOLE_WARNING(kTag, "Off-screen sprite alloc failed; falling back to direct panel draw.");
-        delete canvas_;
-        canvas_ = nullptr;
+    // Reusable off-screen strip for banded, flicker-free rendering. There is no PSRAM, so buffers
+    // compete with WiFi/lwIP/TLS and the AircraftDictionary in fragmented internal SRAM: a
+    // full-frame buffer does not fit at any depth (largest free block ~31 KB << ~115 KB at 16-bit
+    // / ~57 KB at 8-bit). A single 240xkBandHeight 16-bit strip (~19 KB, see kBandHeight) fits and
+    // is reused for every band, keeping full color. If even this small allocation fails we fall
+    // back to drawing directly to the panel (functional, but flickers).
+    static_assert(RadarView::kScreenHeight % kBandHeight == 0, "kBandHeight must divide screen height");
+    band_ = new LGFX_Sprite(&lcd_);
+    band_->setColorDepth(16);
+    if (band_->createSprite(RadarView::kScreenWidth, kBandHeight) == nullptr) {
+        CONSOLE_WARNING(kTag, "Strip buffer alloc failed; falling back to direct panel draw (may flicker).");
+        delete band_;
+        band_ = nullptr;
     }
 
     // Draw the initial background so the panel shows something before the first aircraft arrive.
-    lgfx::LGFXBase* gfx = canvas_ ? static_cast<lgfx::LGFXBase*>(canvas_) : static_cast<lgfx::LGFXBase*>(&lcd_);
-    radar_.DrawBackground(gfx, false);
-    if (canvas_) canvas_->pushSprite(0, 0);
+    RenderFrame(false);
 
     initialized_ = true;
-    CONSOLE_INFO(kTag, "GC9A01 display initialized (%s buffering).", canvas_ ? "double" : "direct");
+    CONSOLE_INFO(kTag, "GC9A01 display initialized (%s rendering).", band_ ? "banded" : "direct");
     return true;
 }
 
@@ -98,9 +100,10 @@ void Display::Update() {
     }
     last_frame_timestamp_ms_ = now_ms;
 
-    bool position_valid = ResolveCenter();
+    RenderFrame(ResolveCenter());
+}
 
-    lgfx::LGFXBase* gfx = canvas_ ? static_cast<lgfx::LGFXBase*>(canvas_) : static_cast<lgfx::LGFXBase*>(&lcd_);
+void Display::DrawScene(lgfx::LGFXBase* gfx, bool position_valid) {
     radar_.DrawBackground(gfx, position_valid);
 
     if (position_valid) {
@@ -123,10 +126,27 @@ void Display::Update() {
             }
         }
     }
+}
 
-    if (canvas_) {
-        canvas_->pushSprite(0, 0);
+void Display::RenderFrame(bool position_valid) {
+    if (band_ != nullptr) {
+        // Banded path: redraw the whole scene into the strip once per band (RadarView clips the
+        // out-of-strip pixels) and push each strip to its screen row. Every screen region is
+        // written exactly once per frame, so there is no clear-then-redraw flicker. The scene is
+        // redrawn per band, but at ~5 Hz over a handful of aircraft the cost is negligible.
+        for (int16_t y0 = 0; y0 < RadarView::kScreenHeight; y0 += kBandHeight) {
+            radar_.SetOriginY(y0);
+            DrawScene(band_, position_valid);
+            band_->pushSprite(0, y0);
+        }
+        radar_.SetOriginY(0);
+        return;
     }
+
+    // Direct fallback (strip alloc failed): draw straight to the panel. DrawBackground()
+    // fillScreen()s the live panel each frame, so this flickers -- acceptable degraded mode.
+    radar_.SetOriginY(0);
+    DrawScene(&lcd_, position_valid);
 }
 
 #endif  // WITH_DISPLAY

@@ -18,6 +18,15 @@ class Display {
     // staying clear of the SPI2 coprocessor link and the web server.
     static constexpr uint32_t kMinFrameIntervalMs = 200;
 
+    // Height, in pixels, of the reusable off-screen strip used for banded rendering. There is no
+    // PSRAM and internal SRAM is fragmented (WiFi/lwIP/TLS): a full-frame buffer does not fit at
+    // any color depth (240x240 is ~115 KB at 16-bit / ~57 KB at 8-bit, but the largest free block
+    // is only ~31 KB). Instead the whole scene is redrawn into a small 240xkBandHeight strip and
+    // pushed once per band, so each screen region is written exactly once per frame (no flicker)
+    // while keeping full 16-bit color. 40 divides 240 evenly (6 bands); 240*40*2 = ~19 KB fits the
+    // free block with margin. Must evenly divide RadarView::kScreenHeight.
+    static constexpr int16_t kBandHeight = 40;
+
     /**
      * Initialize the display: bring up the panel over SPI3, allocate the off-screen sprite (or
      * fall back to direct-to-panel drawing if the ~115 KB allocation fails), and draw the
@@ -37,8 +46,18 @@ class Display {
     // Whether a valid receiver center position is currently available.
     bool ResolveCenter();
 
+    // Render one full frame: draw the scene strip-by-strip into band_ and push each strip (banded,
+    // flicker-free), or straight to lcd_ if band_ is unavailable (direct fallback, flickers).
+    void RenderFrame(bool position_valid);
+
+    // Draw the full radar scene (background + all valid targets) onto gfx at the renderer's
+    // current origin. Shared by the banded and direct-draw paths.
+    void DrawScene(lgfx::LGFXBase* gfx, bool position_valid);
+
     LGFX lcd_;
-    LGFX_Sprite* canvas_ = nullptr;  // Off-screen buffer; nullptr => draw directly to lcd_.
+    // Reusable 240xkBandHeight off-screen strip for banded, flicker-free rendering. nullptr if the
+    // (small) allocation failed, in which case we fall back to drawing directly to lcd_ (flickers).
+    LGFX_Sprite* band_ = nullptr;
     RadarView radar_;
 
     bool initialized_ = false;

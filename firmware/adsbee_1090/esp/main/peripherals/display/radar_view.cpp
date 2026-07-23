@@ -48,42 +48,49 @@ void RadarView::LatLonToScreen(float latitude_deg, float longitude_deg, float& o
 }
 
 void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
+    // origin_y_ shifts every y so a single horizontal strip of the scene can be drawn into a
+    // small sprite (banded rendering); it is 0 for full-frame / direct draw. fillScreen clears
+    // only the target (the strip), so the union of strips reproduces the whole cleared frame.
+    const int16_t oy = origin_y_;
     gfx->fillScreen(kColorBackground);
 
     // Range rings at 1/3, 2/3 and full range.
-    gfx->drawCircle(kCenterX, kCenterY, kRadiusPx / 3, kColorGrid);
-    gfx->drawCircle(kCenterX, kCenterY, (kRadiusPx * 2) / 3, kColorGrid);
-    gfx->drawCircle(kCenterX, kCenterY, kRadiusPx, kColorGridBright);
+    gfx->drawCircle(kCenterX, kCenterY - oy, kRadiusPx / 3, kColorGrid);
+    gfx->drawCircle(kCenterX, kCenterY - oy, (kRadiusPx * 2) / 3, kColorGrid);
+    gfx->drawCircle(kCenterX, kCenterY - oy, kRadiusPx, kColorGridBright);
 
     // Crosshairs.
-    gfx->drawFastVLine(kCenterX, kCenterY - kRadiusPx, kRadiusPx * 2, kColorGrid);
-    gfx->drawFastHLine(kCenterX - kRadiusPx, kCenterY, kRadiusPx * 2, kColorGrid);
+    gfx->drawFastVLine(kCenterX, kCenterY - kRadiusPx - oy, kRadiusPx * 2, kColorGrid);
+    gfx->drawFastHLine(kCenterX - kRadiusPx, kCenterY - oy, kRadiusPx * 2, kColorGrid);
 
     // Cardinal labels.
     gfx->setTextColor(kColorLabel);
     gfx->setTextDatum(lgfx::textdatum_t::middle_center);
     gfx->setTextSize(1);
-    gfx->drawString("N", kCenterX, kCenterY - kRadiusPx + 8);
-    gfx->drawString("S", kCenterX, kCenterY + kRadiusPx - 8);
-    gfx->drawString("E", kCenterX + kRadiusPx - 8, kCenterY);
-    gfx->drawString("W", kCenterX - kRadiusPx + 8, kCenterY);
+    gfx->drawString("N", kCenterX, kCenterY - kRadiusPx + 8 - oy);
+    gfx->drawString("S", kCenterX, kCenterY + kRadiusPx - 8 - oy);
+    gfx->drawString("E", kCenterX + kRadiusPx - 8, kCenterY - oy);
+    gfx->drawString("W", kCenterX - kRadiusPx + 8, kCenterY - oy);
 
     // Range scale label (outer ring range in km) near the bottom of the screen.
     char scale_buf[16];
     snprintf(scale_buf, sizeof(scale_buf), "%dkm", static_cast<int>(range_km_ + 0.5f));
     gfx->setTextColor(kColorGridBright);
     gfx->setTextDatum(lgfx::textdatum_t::bottom_center);
-    gfx->drawString(scale_buf, kCenterX, kScreenHeight - 2);
+    gfx->drawString(scale_buf, kCenterX, kScreenHeight - 2 - oy);
 
     if (!position_valid) {
         gfx->setTextColor(kColorAcquiring);
         gfx->setTextDatum(lgfx::textdatum_t::middle_center);
-        gfx->drawString("acquiring", kCenterX, kCenterY - 6);
-        gfx->drawString("position", kCenterX, kCenterY + 6);
+        gfx->drawString("acquiring", kCenterX, kCenterY - 6 - oy);
+        gfx->drawString("position", kCenterX, kCenterY + 6 - oy);
     }
 }
 
 void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
+    // Geometry below is computed in absolute scene coordinates; oy is applied only at the final
+    // draw calls so banded rendering (see SetOriginY) lands each strip correctly.
+    const int16_t oy = origin_y_;
     float sx, sy, range_km;
     LatLonToScreen(target.latitude_deg, target.longitude_deg, sx, sy, range_km);
 
@@ -92,7 +99,7 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
         float bearing_rad = atan2f(sx - kCenterX, kCenterY - sy);  // 0 = north, clockwise.
         int16_t dot_x = kCenterX + static_cast<int16_t>(sinf(bearing_rad) * kRadiusPx);
         int16_t dot_y = kCenterY - static_cast<int16_t>(cosf(bearing_rad) * kRadiusPx);
-        gfx->fillSmoothCircle(dot_x, dot_y, 2, kColorRimDot);
+        gfx->fillSmoothCircle(dot_x, dot_y - oy, 2, kColorRimDot);
         return;
     }
 
@@ -115,19 +122,19 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
         float baseRx = sx - fx * (kTriangleLenPx * 0.5f) - rx * kTriangleHalfWidthPx;
         float baseRy = sy - fy * (kTriangleLenPx * 0.5f) - ry * kTriangleHalfWidthPx;
 
-        gfx->fillTriangle(static_cast<int16_t>(tipx), static_cast<int16_t>(tipy),
-                          static_cast<int16_t>(baseLx), static_cast<int16_t>(baseLy),
-                          static_cast<int16_t>(baseRx), static_cast<int16_t>(baseRy), kColorTarget);
+        gfx->fillTriangle(static_cast<int16_t>(tipx), static_cast<int16_t>(tipy - oy),
+                          static_cast<int16_t>(baseLx), static_cast<int16_t>(baseLy - oy),
+                          static_cast<int16_t>(baseRx), static_cast<int16_t>(baseRy - oy), kColorTarget);
 
         // Speed vector.
         if (target.speed_kts > 0) {
             float len = target.speed_kts * kVectorPxPerKt;
             if (len > kVectorMaxPx) len = kVectorMaxPx;
-            gfx->drawWideLine(sx, sy, sx + fx * len, sy + fy * len, 1.5f, kColorVector);
+            gfx->drawWideLine(sx, sy - oy, sx + fx * len, sy + fy * len - oy, 1.5f, kColorVector);
         }
     } else {
         // Unknown heading: plain dot.
-        gfx->fillSmoothCircle(ix, iy, 3, kColorTarget);
+        gfx->fillSmoothCircle(ix, iy - oy, 3, kColorTarget);
     }
 
     // Callsign / altitude tag, offset up-right from the target. Prefer the callsign; else fall
@@ -145,7 +152,7 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
     gfx->setTextColor(kColorTargetTag);
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::bottom_left);
-    gfx->drawString(tag, ix + 5, iy - 3);
+    gfx->drawString(tag, ix + 5, iy - 3 - oy);
 }
 
 #endif  // WITH_DISPLAY
