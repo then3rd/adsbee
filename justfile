@@ -1,14 +1,17 @@
 # ADSBee 1090 — one-stop task runner.
 # Install just: https://github.com/casey/just   Run `just` (or `just help`) for the menu.
 #
-# Debug builds: prefix any build/test with `debug=true`, e.g. `debug=true just build`.
+# Debug builds: override `debug` on any build/test, e.g. `just debug=true build`.
+# Force a coprocessor reflash (dev cache-buster in the firmware version): `just force=true build`.
 
 set shell := ["bash", "-uc"]
 
 debug := "false"
+force := "false"
 
-# ─── Derived from `debug` ─────────────────────────────────────────────────────
+# ─── Derived from `debug` / `force` ───────────────────────────────────────────
 _flag := if debug == "true" { "-d" } else { "" }
+_fflag := if force == "true" { "-f" } else { "" }
 _btype := if debug == "true" { "Debug" } else { "Release" }
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -79,22 +82,23 @@ _ensure-udev:
 
 ##@ Build
 
-#@ Set debug=true for Debug builds (e.g. `debug=true just build`)
+#@ Set debug=true for Debug builds (e.g. `just debug=true build`)
+#@ Set force=true to force a coprocessor reflash (e.g. `just force=true build`)
 # Build all targets in order: ESP32 → CC1312 → RP2040 → combined.uf2
 build:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} all
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} all
 
 # Build ESP32-S3 firmware only
 build-esp:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} esp
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} esp
 
 # Build TI CC1312 firmware only
 build-ti:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} ti
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} ti
 
 # Build RP2040 firmware only (requires esp + ti built first)
 build-pico:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} pico
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} pico
 
 # Remove all build directories
 clean:
