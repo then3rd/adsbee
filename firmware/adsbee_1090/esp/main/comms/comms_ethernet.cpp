@@ -80,6 +80,16 @@ void CommsManager::EthernetEventHandler(void* arg, esp_event_base_t event_base, 
 }
 
 bool CommsManager::EthernetInit() {
+#ifdef WITH_DISPLAY
+    // The GC9A01 display and the W5500 Ethernet add-on share the aux SPI3 bus and GPIO47/48;
+    // they are mutually exclusive. When the display is compiled in it owns SPI3, so the
+    // Ethernet SPI bring-up below is compiled out to guarantee two SPI3 bus owners never link
+    // together. (Belt-and-suspenders: EthernetInit() is also gated at runtime on
+    // core_network_settings.ethernet_enabled.)
+    CONSOLE_WARNING("CommsManager::EthernetInit",
+                    "Ethernet is disabled because WITH_DISPLAY owns the aux SPI3 bus.");
+    return false;
+#else
     //  Create instance(s) of esp-netif for SPI Ethernet(s)
     esp_netif_config_t cfg = ESP_NETIF_DEFAULT_ETH();
     ethernet_netif_ = esp_netif_new(&cfg);
@@ -146,4 +156,5 @@ bool CommsManager::EthernetInit() {
     ESP_ERROR_CHECK(esp_eth_start(ethernet_handle_));
 
     return true;
+#endif  // WITH_DISPLAY
 }

@@ -4,3 +4,6 @@
 [submodule "firmware/adsbee_1090/ti/setup/simplelink-lowpower-f2-sdk"]
 	path = firmware/adsbee_1090/ti/setup/simplelink-lowpower-f2-sdk
 	url = git@github.com:TexasInstruments/simplelink-lowpower-f2-sdk.git
+[submodule "firmware/adsbee_1090/esp/components/LovyanGFX"]
+	path = firmware/adsbee_1090/esp/components/LovyanGFX
+	url = https://github.com/lovyan03/LovyanGFX.git

@@ -28,6 +28,10 @@
 #include "spi_coprocessor.hh"
 #include "task_priorities.hh"
 
+#ifdef WITH_DISPLAY
+#include "display.hh"
+#endif
+
 #define HARDWARE_UNIT_TESTS
 // #define PRINT_HEAP_USAGE
 
@@ -83,6 +87,10 @@ extern "C" void app_main(void) {
                 kDeviceStatusUpdateTaskPriority, NULL);
     adsbee_server.Init();
 
+#ifdef WITH_DISPLAY
+    display.Init();
+#endif
+
 #ifdef HARDWARE_UNIT_TESTS
     RunHardwareUnitTests();
 #endif
@@ -92,6 +100,10 @@ extern "C" void app_main(void) {
 #endif
     while (1) {
         adsbee_server.Update();
+
+#ifdef WITH_DISPLAY
+        display.Update();  // Internally rate-limited (~5 Hz); cheap no-op between frames.
+#endif
 
         // Yield to the idle task to avoid a watchdog trigger. Note: Delay must be >= 10ms since 100Hz tick is typical.
         vTaskDelay(1);  // Delay 1 tick (10ms).

@@ -24,6 +24,7 @@ idf_component_register(
         "${COMMON_DIR}/settings"
         "comms"
         "peripherals/pico"
+        "peripherals/display"
         "server"
         "target_test"
     INCLUDE_DIRS
@@ -47,6 +48,7 @@ idf_component_register(
         "${COMMON_DIR}/settings"
         "comms"
         "peripherals/pico"
+        "peripherals/display"
         "server"
         "target_test"
     EMBED_TXTFILES
@@ -55,6 +57,11 @@ idf_component_register(
         "server/web/adsbee.js"
         "server/web/favicon.png"
 )
+# LovyanGFX (GC9A01 display) is vendored as a local component at esp/components/LovyanGFX
+# (git submodule, pulled by `just setup`). ESP-IDF auto-discovers it, and `main` implicitly
+# depends on all components, so no explicit REQUIRES is needed here. It is only referenced from
+# the display sources, which are compiled out unless WITH_DISPLAY; the linker's --gc-sections
+# drops it from non-display images.
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-packed-bitfield-compat)
 
