@@ -9,6 +9,7 @@
 #include "json_utils.hh"
 #include "pico.hh"
 #include "settings.hh"
+#include "simulation.hh"
 #include "spi_coprocessor.hh"
 #include "task_priorities.hh"
 #include "unit_conversions.hh"
@@ -147,6 +148,11 @@ bool ADSBeeServer::Update() {
         // here.
         SendNetworkMetricsMessage();
     }
+
+    // Advance demo/simulation mode (AT+SIM). Runs every tick for smooth motion and keeps its
+    // synthetic aircraft timestamps fresh so the prune above (which ran first) won't drop them.
+    // Cheap no-op when disabled.
+    simulation.Update(timestamp_ms);
 
     // Run raw packet ingestion and reporting if queues are >50% full or every 200ms.
     bool at_least_one_queue_half_full =

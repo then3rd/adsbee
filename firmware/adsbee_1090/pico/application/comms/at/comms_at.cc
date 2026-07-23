@@ -198,6 +198,39 @@ CPP_AT_CALLBACK(CommsManager::ATDisplayRangeCallback) {
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
 
+CPP_AT_CALLBACK(CommsManager::ATSimulationCallback) {
+    switch (op) {
+        case '?':
+            // Reports "=<enabled>,<num_aircraft>".
+            CPP_AT_CMD_PRINTF("=%d,%d", settings_manager.settings.sim_mode_enabled ? 1 : 0,
+                              settings_manager.settings.sim_num_aircraft);
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        case '=': {
+            if (!CPP_AT_HAS_ARG(0)) {
+                CPP_AT_ERROR("Requires an argument (0 or 1). AT+SIM=<enabled>[,<num_aircraft>]");
+            }
+            bool enabled;
+            CPP_AT_TRY_ARG2NUM(0, enabled);
+            settings_manager.settings.sim_mode_enabled = enabled;
+            if (CPP_AT_HAS_ARG(1)) {
+                uint16_t num_aircraft;
+                CPP_AT_TRY_ARG2NUM(1, num_aircraft);
+                if (num_aircraft < 1 || num_aircraft > SettingsManager::Settings::kMaxSimAircraft) {
+                    CPP_AT_ERROR("Number of simulated aircraft must be between 1 and %d.",
+                                 SettingsManager::Settings::kMaxSimAircraft);
+                }
+                settings_manager.settings.sim_num_aircraft = static_cast<uint8_t>(num_aircraft);
+            }
+            // The simulation runs on the ESP32; push the updated settings over SPI so it picks them up.
+            settings_manager.SyncToCoprocessors();
+            CPP_AT_SUCCESS();
+            break;
+        }
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
 CPP_AT_CALLBACK(CommsManager::ATBootloader) {
     switch (op) {
         case '=': {
@@ -1484,6 +1517,14 @@ const CppAT::ATCommandDef_t at_command_list[] = {
                     "Display nonvolatile settings.\r\n\tAT+SETTINGS?\r\n\t+SETTINGS=...\r\n\tDump settings in AT "
                     "command format.\r\n\tAT+SETTINGS?DUMP\r\n\t+SETTINGS=...",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATSettingsCallback, comms_manager)},
+    {.command = "SIM",
+     .min_args = 0,
+     .max_args = 2,
+     .help_string = "Enable demo/simulation mode: inject synthetic moving aircraft (shown on the radar "
+                    "display, web UI, and output feeds) with no live RF needed.\r\n\tAT+SIM=<enabled>[,"
+                    "<num_aircraft>]\r\n\tenabled = [0 1], num_aircraft = [1..12].\r\n\tAT+SIM?\r\n\tQuery "
+                    "the current simulation state.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATSimulationCallback, comms_manager)},
     {.command = "SUBG_ENABLE",
      .min_args = 0,
      .max_args = 2,

@@ -17,6 +17,7 @@
 #include "hal.hh"                // get_time_since_boot_ms()
 #include "object_dictionary.hh"  // object_dictionary, RxPosition
 #include "settings.hh"
+#include "simulation.hh"  // simulation.GetActiveCenter() fallback center for demo mode
 #include "splash_data.hh"  // data::splash::kImage / kWidth / kHeight
 
 static const char* kTag = "Display";
@@ -205,15 +206,20 @@ bool Display::ResolveCenter() {
     float lat = rx.latitude_deg;
     float lon = rx.longitude_deg;
 
-    if (source == SettingsManager::RxPosition::kPositionSourceNone) {
-        return false;
+    // A real fix requires a known source and a populated position -- treat a still-unpopulated (0,0)
+    // fix as unavailable to avoid centering on the Gulf of Guinea.
+    if (source != SettingsManager::RxPosition::kPositionSourceNone && !(lat == 0.0f && lon == 0.0f)) {
+        radar_.SetCenter(lat, lon);
+        return true;
     }
-    // Treat a still-unpopulated (0,0) fix as unavailable to avoid centering on the Gulf of Guinea.
-    if (lat == 0.0f && lon == 0.0f) {
-        return false;
+    // No real fix. If demo/simulation mode (AT+SIM) is running, center on its center -- which is a
+    // fabricated demo location when no receiver position exists -- so the synthetic traffic shows.
+    float sim_lat, sim_lon;
+    if (simulation.GetActiveCenter(sim_lat, sim_lon)) {
+        radar_.SetCenter(sim_lat, sim_lon);
+        return true;
     }
-    radar_.SetCenter(lat, lon);
-    return true;
+    return false;
 }
 
 void Display::Update() {

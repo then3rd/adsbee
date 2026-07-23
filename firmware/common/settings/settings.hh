@@ -13,7 +13,7 @@
 #include "pico/rand.h"
 #endif
 
-static constexpr uint32_t kSettingsVersion = 14;  // Change this when settings format changes!
+static constexpr uint32_t kSettingsVersion = 15;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 class SettingsManager {
@@ -216,6 +216,17 @@ class SettingsManager {
         static constexpr float kMinDisplayRangeKm = 1.0f;
         static constexpr float kMaxDisplayRangeKm = 500.0f;
         float display_range_km = kDefaultDisplayRangeKm;
+
+        // Simulation / demo mode settings
+        // When enabled, the ESP32 injects synthetic moving aircraft into its aircraft dictionary so
+        // the radar display, web UI, and output feeds all show traffic without any live RF -- handy
+        // as a bench demo. Triggered from the RP2040 via AT+SIM and consumed on the ESP32 (see
+        // Simulation) once the settings struct is synced over SPI. If no real receiver position is
+        // set, the ESP32 falls back to a fixed demo center so the radar has something to center on.
+        static constexpr uint8_t kMaxSimAircraft = 12;
+        static constexpr uint8_t kDefaultSimAircraft = 6;
+        bool sim_mode_enabled = false;
+        uint8_t sim_num_aircraft = kDefaultSimAircraft;
 
         /**
          * Default constructor.
