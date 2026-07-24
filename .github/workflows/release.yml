@@ -1,0 +1,181 @@
+name: ADSBee Fork Release
+
+# Cut a durable release from a fork tag. See FORK_NOTES.md -> "Cutting a release".
+#
+# Triggered by pushing a `gc9a01-v*` tag (create one with firmware/scripts/tag_release.sh).
+# Because a tag is an immutable ref, the release it produces survives the branch's
+# rebase/force-push cycle. This builds BOTH the display-enabled and default variants and
+# attaches the flashable images to a GitHub Release.
+#
+# Mirrors the esp -> ti -> pico build chain in firmware.yml, with two changes:
+#   - WITH_DISPLAY is threaded through as a build matrix (ON = display, OFF = default).
+#   - artifacts are published to a GitHub Release instead of being ephemeral (retention-days: 1).
+# TI (sub_ghz_radio) is display-independent, so it is built once and shared by both variants.
+
+on:
+  push:
+    tags:
+      - 'gc9a01-v*'
+
+jobs:
+  esp_target_build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { with_display: "ON", variant: display }
+          - { with_display: "OFF", variant: default }
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: Build ESP32 firmware (WITH_DISPLAY=${{ matrix.with_display }})
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: release-v5.4
+        target: esp32s3
+        path: firmware/adsbee_1090/esp
+        command: idf.py -D WITH_DISPLAY=${{ matrix.with_display }} set-target esp32s3 build
+    - name: Upload ESP32 firmware
+      uses: actions/upload-artifact@v4
+      with:
+        name: adsbee_esp-${{ matrix.variant }}.bin
+        path: firmware/adsbee_1090/esp/build/adsbee_esp.bin
+        retention-days: 1
+    - name: Upload ESP32 bootloader
+      uses: actions/upload-artifact@v4
+      with:
+        name: bootloader-${{ matrix.variant }}.bin
+        path: firmware/adsbee_1090/esp/build/bootloader/bootloader.bin
+        retention-days: 1
+    - name: Upload ESP32 partition table
+      uses: actions/upload-artifact@v4
+      with:
+        name: partition-table-${{ matrix.variant }}.bin
+        path: firmware/adsbee_1090/esp/build/partition_table/partition-table.bin
+        retention-days: 1
+
+  ti_target_build:
+    runs-on: ubuntu-latest
+    container: coolnamesalltaken/ti-lpf2
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: Create TI build directory
+      working-directory: firmware/adsbee_1090/ti/sub_ghz_radio
+      run: mkdir -p build
+    - name: Run cmake with build type "Release"
+      working-directory: firmware/adsbee_1090/ti/sub_ghz_radio/build
+      run: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ ..
+    - name: Build
+      working-directory: firmware/adsbee_1090/ti/sub_ghz_radio/build
+      run: cmake --build . --config Release --target all -j 22
+    - name: upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: sub_ghz_radio.bin
+        path: firmware/adsbee_1090/ti/sub_ghz_radio/build/sub_ghz_radio.bin
+        retention-days: 1
+
+  pico_target_build:
+    runs-on: ubuntu-latest
+    container: coolnamesalltaken/pico-docker
+    needs:
+      - esp_target_build
+      - ti_target_build
+    strategy:
+      matrix:
+        include:
+          - { with_display: "ON", variant: display }
+          - { with_display: "OFF", variant: default }
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: Create ESP32 build directory
+      working-directory: firmware/adsbee_1090/esp
+      run: mkdir -p build
+    - name: Download ESP32 firmware
+      uses: actions/download-artifact@v4
+      with:
+        name: adsbee_esp-${{ matrix.variant }}.bin
+        path: firmware/adsbee_1090/esp/build/Release
+    - name: Download ESP32 bootloader
+      uses: actions/download-artifact@v4
+      with:
+        name: bootloader-${{ matrix.variant }}.bin
+        path: firmware/adsbee_1090/esp/build/Release/bootloader
+    - name: Download ESP32 partition table
+      uses: actions/download-artifact@v4
+      with:
+        name: partition-table-${{ matrix.variant }}.bin
+        path: firmware/adsbee_1090/esp/build/Release/partition_table
+    - name: Download TI firmware
+      uses: actions/download-artifact@v4
+      with:
+        name: sub_ghz_radio.bin
+        path: firmware/adsbee_1090/ti/sub_ghz_radio/build
+    - name: Create Pico build directory
+      working-directory: firmware/adsbee_1090/pico
+      run: mkdir -p build
+    - name: Run cmake with build type "Release" (WITH_DISPLAY=${{ matrix.with_display }})
+      working-directory: firmware/adsbee_1090/pico/build
+      run: cmake -DCMAKE_BUILD_TYPE=Release -D WITH_DISPLAY=${{ matrix.with_display }} -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ ..
+    - name: Build
+      working-directory: firmware/adsbee_1090/pico/build
+      run: cmake --build . --config Release --target all -j 22
+    - name: Stage release artifacts (rename per variant)
+      working-directory: firmware/adsbee_1090/pico/build/application
+      run: |
+        cp combined.uf2 "combined-${{ matrix.variant }}.uf2"
+        cp adsbee_1090.ota "adsbee_1090-${{ matrix.variant }}.ota"
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.variant }}
+        path: |
+          firmware/adsbee_1090/pico/build/application/combined-${{ matrix.variant }}.uf2
+          firmware/adsbee_1090/pico/build/application/adsbee_1090-${{ matrix.variant }}.ota
+
+  publish_release:
+    runs-on: ubuntu-latest
+    needs: pico_target_build
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download all firmware artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: firmware-*
+        path: dist
+        merge-multiple: true
+    - name: List staged artifacts
+      run: ls -R dist
+    - name: Publish GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        # The tag that triggered this run (github.ref_name, e.g. gc9a01-v1.0.0).
+        generate_release_notes: true
+        body: |
+          Fork release of ADSBee 1090 with optional GC9A01 round-LCD radar support.
+
+          **Two flashable variants are attached:**
+          - `combined-display.uf2` — GC9A01 radar display enabled (WITH_DISPLAY=ON).
+          - `combined-default.uf2` — default build, comparable to upstream (display off).
+
+          Flash the `combined-*.uf2` over USB, or use the matching `adsbee_1090-*.ota`
+          for over-the-air updates. See FORK_NOTES.md for build details and the
+          display-vs-Ethernet caveat.
+        files: |
+          dist/combined-display.uf2
+          dist/adsbee_1090-display.ota
+          dist/combined-default.uf2
+          dist/adsbee_1090-default.ota

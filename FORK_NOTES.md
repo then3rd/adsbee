@@ -80,6 +80,39 @@ edits are all `#ifdef WITH_DISPLAY`-guarded, so conflicts are usually trivial co
   every upstream bump; resolve by re-applying your bump on top of theirs)
 - Settings: `common/settings/settings.hh` (`kSettingsVersion` + display fields), `common/settings/settings.cpp`
 
+## Cutting a release
+
+Rebasing rewrites the branch tip, so `GC9A01-radar` is deliberately disposable history — there is no
+durable "this is what I shipped" pointer on the branch itself. **Releases are pinned with tags
+instead.** A tag is a separate, immutable ref: force-pushing the branch never moves or deletes it,
+and GitHub keeps the tagged commit alive forever (even though, after a rebase, that commit is no
+longer an ancestor of the branch tip — it sits on a divergent line, which is exactly what we want).
+So every release stays checkout-able (`git checkout gc9a01-v1.0.0`) no matter how many times the
+branch is rebased on top of upstream.
+
+Tags use the fork-owned scheme **`gc9a01-vX.Y.Z`**. This is intentionally distinct from:
+
+- upstream's `adsbee_1090-X.Y.Z` tags (inherited by fetch — never reuse that namespace), and
+- the in-firmware version constants in `common/coprocessor/object_dictionary.cpp`
+  (`kFirmwareVersion*`). The fork **release** version is not the **firmware** version; don't conflate
+  them. Bump the firmware version per the discipline below; pick the fork release version on its own.
+
+```bash
+# from the tip you want to ship (usually a clean GC9A01-radar):
+bash firmware/scripts/tag_release.sh 1.0.0    # creates annotated tag gc9a01-v1.0.0 (no push)
+git show gc9a01-v1.0.0                          # review
+git push origin gc9a01-v1.0.0                   # plain push — triggers the release CI
+```
+
+Pushing a `gc9a01-v*` tag runs `.github/workflows/release.yml`, which builds **both** variants
+(display-enabled `WITH_DISPLAY=ON` and default `OFF`) via the same esp → ti → pico chain as CI, then
+publishes a GitHub Release with the flashable images attached: `combined-display.uf2` /
+`adsbee_1090-display.ota` and `combined-default.uf2` / `adsbee_1090-default.ota`.
+
+Tagging and `sync_upstream.sh` are orthogonal: rebase and force-push the branch as often as you like;
+past release tags keep pointing at the exact code they were cut from. The tag push is a **plain**
+push (`git push origin <tag>`) — tags are additive, so `--force` is never involved here.
+
 ## Intentional design decisions (do not "fix" these during a rebase)
 
 - **`display_rotation_deg` / `display_range_km` are unguarded in the shared `Settings` struct on
