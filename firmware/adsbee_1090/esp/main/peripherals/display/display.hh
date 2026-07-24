@@ -70,6 +70,12 @@ class Display {
     void Update();
 
    private:
+    // Apply the configured display_rotation_deg (synced from the RP2040 over SPI) to the panel,
+    // but only issue the setRotation() command when the value actually changed. Called from Init()
+    // before the splash so the boot logo honors the mounting orientation, and every frame from
+    // Update() to pick up live changes.
+    void ApplyRotation();
+
     // Draw the embedded ADSBee logo centered on the panel and hold it for kSplashDurationMs.
     // Blocking (vTaskDelay); called once from Init() before the radar view starts rendering.
     void ShowSplash();
@@ -107,6 +113,11 @@ class Display {
 
     bool initialized_ = false;
     uint32_t last_frame_timestamp_ms_ = 0;
+
+    // Last display_rotation_deg value applied to lcd_.setRotation(). Starts at a value no valid
+    // setting can produce (settings are clamped to {0,90,180,270} by the AT command) so the first
+    // Update() always applies the synced setting, even if it happens to be the default 0.
+    uint16_t last_applied_rotation_deg_ = UINT16_MAX;
 };
 
 extern Display display;

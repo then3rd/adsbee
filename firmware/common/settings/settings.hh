@@ -13,7 +13,7 @@
 #include "pico/rand.h"
 #endif
 
-static constexpr uint32_t kSettingsVersion = 15;  // Change this when settings format changes!
+static constexpr uint32_t kSettingsVersion = 16;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 class SettingsManager {
@@ -216,6 +216,14 @@ class SettingsManager {
         static constexpr float kMinDisplayRangeKm = 1.0f;
         static constexpr float kMaxDisplayRangeKm = 500.0f;
         float display_range_km = kDefaultDisplayRangeKm;
+
+        // Display rotation, in degrees clockwise, compensating for how the panel is physically
+        // mounted. Only quadrant steps are supported (LovyanGFX's setRotation() is quadrant-only;
+        // the panel is round/square so no layout reflow is needed). Consumed by the ESP32 display
+        // (Display::Init()/Update() -> lcd_.setRotation()) once the settings struct is synced over
+        // SPI.
+        static constexpr uint16_t kDefaultDisplayRotationDeg = 0;
+        uint16_t display_rotation_deg = kDefaultDisplayRotationDeg;
 
         // Simulation / demo mode settings
         // When enabled, the ESP32 injects synthetic moving aircraft into its aircraft dictionary so

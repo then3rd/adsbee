@@ -198,6 +198,30 @@ CPP_AT_CALLBACK(CommsManager::ATDisplayRangeCallback) {
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
 
+CPP_AT_CALLBACK(CommsManager::ATDisplayRotationCallback) {
+    switch (op) {
+        case '?':
+            CPP_AT_CMD_PRINTF("=%u", settings_manager.settings.display_rotation_deg);
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        case '=':
+            if (CPP_AT_HAS_ARG(0)) {
+                uint16_t rotation_deg;
+                CPP_AT_TRY_ARG2NUM(0, rotation_deg);
+                if (rotation_deg != 0 && rotation_deg != 90 && rotation_deg != 180 &&
+                    rotation_deg != 270) {
+                    CPP_AT_ERROR("Display rotation must be 0, 90, 180, or 270 degrees.");
+                }
+                settings_manager.settings.display_rotation_deg = rotation_deg;
+                // Push the new rotation to the ESP32 so the display picks it up.
+                settings_manager.SyncToCoprocessors();
+                CPP_AT_SUCCESS();
+            }
+            break;
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
 CPP_AT_CALLBACK(CommsManager::ATSimulationCallback) {
     switch (op) {
         case '?':
@@ -1415,6 +1439,12 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .help_string = "AT+DISPLAY_RANGE=<range_km>\r\n\tSet the radar display outer-ring range (zoom) in "
                     "kilometers (smaller = more zoomed in).\r\n\tAT+DISPLAY_RANGE?\r\n\tQuery the current range.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDisplayRangeCallback, comms_manager)},
+    {.command = "DISPLAY_ROTATION",
+     .min_args = 0,
+     .max_args = 1,
+     .help_string = "AT+DISPLAY_ROTATION=<0|90|180|270>\r\n\tRotate the radar display clockwise to match "
+                    "physical mounting orientation.\r\n\tAT+DISPLAY_ROTATION?\r\n\tQuery the current rotation.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDisplayRotationCallback, comms_manager)},
     {.command = "ETHERNET",
      .min_args = 0,
      .max_args = 1,

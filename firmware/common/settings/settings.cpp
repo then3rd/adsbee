@@ -30,6 +30,8 @@ void SettingsManager::Print() {
                               kConsoleLogLevelStrs[settings.log_level]);
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
                               "\tDisplay Range: %d km\r\n", static_cast<int>(settings.display_range_km + 0.5f));
+    print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
+                              "\tDisplay Rotation: %u deg\r\n", settings.display_rotation_deg);
     CONSOLE_PRINTF("%s", print_buf);
     print_buf_len = 0;
 
@@ -137,6 +139,9 @@ void SettingsManager::PrintAT() {
 
     // AT+DISPLAY_RANGE
     CONSOLE_PRINTF("AT+DISPLAY_RANGE=%d\r\n", static_cast<int>(settings.display_range_km + 0.5f));
+
+    // AT+DISPLAY_ROTATION
+    CONSOLE_PRINTF("AT+DISPLAY_ROTATION=%u\r\n", settings.display_rotation_deg);
 
     // AT+ESP32_ENABLE
     CONSOLE_PRINTF("AT+ESP32_ENABLE=%d\r\n", settings.core_network_settings.esp32_enabled);

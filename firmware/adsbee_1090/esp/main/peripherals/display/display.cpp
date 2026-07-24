@@ -92,7 +92,10 @@ bool Display::Init() {
         CONSOLE_ERROR(kTag, "GC9A01 panel init failed; display disabled.");
         return false;  // Leave initialized_ false so Update() is a no-op.
     }
-    lcd_.setRotation(0);
+    // Apply the mounting-orientation rotation up front so the boot splash (and the initial frame)
+    // come out the right way round -- settings are already synced from the RP2040 at this point,
+    // since ADSBeeServer::Init() blocks on the settings read before Display::Init() runs.
+    ApplyRotation();
     lcd_.fillScreen(0x0000);
 
     // Reusable off-screen strip for banded, flicker-free rendering. There is no PSRAM, so buffers
@@ -183,6 +186,17 @@ bool Display::Init() {
     return true;
 }
 
+void Display::ApplyRotation() {
+    // Only issue the setRotation() panel command when the value actually changed. LovyanGFX's
+    // rotation is quadrant-only (0-3, each a 90 deg step); the AT command clamps to {0,90,180,270}
+    // so this division is always exact.
+    uint16_t rotation_deg = settings_manager.settings.display_rotation_deg;
+    if (rotation_deg != last_applied_rotation_deg_) {
+        lcd_.setRotation((rotation_deg / 90) % 4);
+        last_applied_rotation_deg_ = rotation_deg;
+    }
+}
+
 void Display::ShowSplash() {
     lcd_.fillScreen(0x0000);
     // The embedded array is native-endian RGB565; the panel's SPI bus wants the bytes swapped, so
@@ -235,6 +249,9 @@ void Display::Update() {
     // marks the airport cache dirty when the value actually changes, so applying it every frame is
     // cheap.
     radar_.SetRangeKm(settings_manager.settings.display_range_km);
+
+    // Pick up the latest rotation setting (synced from the RP2040 over SPI).
+    ApplyRotation();
 
     // Advance the trail clock and expire stale trails once per frame (not per band).
     radar_.BeginFrame(now_ms);
