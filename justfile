@@ -3,15 +3,19 @@
 #
 # Debug builds: override `debug` on any build/test, e.g. `just debug=true build`.
 # Force a coprocessor reflash (dev cache-buster in the firmware version): `just force=true build`.
+# Optional GC9A01 display (OFF by default): `just display=true build`. Pair with `force=true`
+# when reflashing hardware, since toggling display changes the ESP32 binary but not the version.
 
 set shell := ["bash", "-uc"]
 
 debug := "false"
 force := "false"
+display := "false"
 
-# ─── Derived from `debug` / `force` ───────────────────────────────────────────
+# ─── Derived from `debug` / `force` / `display` ───────────────────────────────
 _flag := if debug == "true" { "-d" } else { "" }
 _fflag := if force == "true" { "-f" } else { "" }
+_dflag := if display == "true" { "--display" } else { "" }
 _btype := if debug == "true" { "Debug" } else { "Release" }
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -84,21 +88,22 @@ _ensure-udev:
 
 #@ Set debug=true for Debug builds (e.g. `just debug=true build`)
 #@ Set force=true to force a coprocessor reflash (e.g. `just force=true build`)
+#@ Set display=true to build the optional GC9A01 display (e.g. `just display=true build`)
 # Build all targets in order: ESP32 → CC1312 → RP2040 → combined.uf2
 build:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} all
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} {{ _dflag }} all
 
 # Build ESP32-S3 firmware only
 build-esp:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} esp
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} {{ _dflag }} esp
 
 # Build TI CC1312 firmware only
 build-ti:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} ti
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} {{ _dflag }} ti
 
 # Build RP2040 firmware only (requires esp + ti built first)
 build-pico:
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} pico
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _fflag }} {{ _dflag }} pico
 
 # Remove all build directories
 clean:
@@ -110,7 +115,7 @@ rebuild: clean build
 ##@ Test
 # Build & run host unit tests; optional ctest -R regex (e.g. `just test AircraftJSON`)
 test FILTER="":
-    cd {{ FW_DIR }} && bash build.sh {{ _flag }} test {{ FILTER }}
+    cd {{ FW_DIR }} && bash build.sh {{ _flag }} {{ _dflag }} test {{ FILTER }}
 
 ##@ Flash / Install
 # Reboot the RP2040 into BOOTSEL (RPI-RP2) mode over USB serial

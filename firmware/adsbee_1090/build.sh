@@ -1,11 +1,14 @@
 #!/bin/bash
 # ADSBee firmware build script.
 # Builds all three firmware targets (ESP32, TI CC1312, RP2040 Pico) using Docker containers.
-# Usage: ./build.sh [-d] [-f] [target] [test_filter]
+# Usage: ./build.sh [-d] [-f] [--display] [target] [test_filter]
 #   targets: all (default), esp, ti, pico, test, clean
 #   -d: build in Debug mode instead of Release
 #   -f: force coprocessor reflash by stamping a per-build cache-buster into the firmware version, so the
 #       RP2040 reflashes the ESP32/CC1312 on next boot even if the release-candidate wasn't bumped (dev only)
+#   --display: build the optional GC9A01 round display support (OFF by default). Can also be enabled
+#       persistently by exporting WITH_DISPLAY=1. NOTE: toggling this changes the ESP32 binary but not
+#       the firmware version, so pair it with -f (or bump the version) to force the coprocessor reflash.
 #   test_filter: optional regex passed to ctest -R when target is "test" (e.g. "AircraftJSON")
 
 set -e
@@ -19,14 +22,26 @@ required_esp_idf_version="v5.5.2"
 
 debug=false
 force_esp_reflash=false
+# Optional GC9A01 display support (WITH_DISPLAY). OFF by default; seed from the environment so it can be
+# enabled persistently with `export WITH_DISPLAY=1`, then let the --display/--no-display flags override.
+with_display=false
+case "${WITH_DISPLAY:-}" in 1 | on | ON | true | TRUE | yes | YES) with_display=true ;; esac
 while [ $# -gt 0 ]; do
     case "$1" in
         -d) debug=true; shift ;;
         -f | --force-esp-reflash) force_esp_reflash=true; shift ;;
+        --display) with_display=true; shift ;;
+        --no-display) with_display=false; shift ;;
         *) break ;;
     esac
 done
 test_filter="${2:-}"
+
+# CMake ON/OFF value threaded into every target's configure step so the display setting is consistent
+# across the ESP32, RP2040, and host builds (the shared Settings struct fields are unguarded, so this
+# only toggles the AT+DISPLAY_* commands and their settings-dump lines -- never the SPI struct layout).
+with_display_cmake=$( [ "$with_display" = true ] && echo ON || echo OFF )
+echo "=== Display support (WITH_DISPLAY): $with_display_cmake ==="
 
 # Path to the gitignored cache-buster header #included by common/coprocessor/object_dictionary.cpp.
 build_id_header="$script_dir/../common/coprocessor/firmware_build_id.hh"
@@ -88,21 +103,25 @@ generate_splash() {
 
 build_esp() {
     check_esp_idf_version
-    generate_splash
+    # The boot-splash asset is only #included by the (guarded) display sources, so a non-display
+    # build neither needs it nor should require Pillow to be installed.
+    if [ "$with_display" = true ]; then
+        generate_splash
+    fi
     if [ "$debug" = true ]; then
         echo "=== Building ESP32-S3 firmware (Debug) ==="
         # sdkconfig_debug is auto-generated on first run by layering sdkconfig.debug on top of sdkconfig.
         # Delete esp/sdkconfig_debug to force regeneration (e.g. after base sdkconfig changes).
         docker compose run --rm esp-idf bash -c "
             cd /firmware/adsbee_1090/esp &&
-            idf.py -B build/Debug -D CMAKE_BUILD_TYPE=Debug -D SDKCONFIG=\"\$(pwd)/sdkconfig_debug\" -D \"SDKCONFIG_DEFAULTS=\$(pwd)/sdkconfig;\$(pwd)/sdkconfig.debug\" build
+            idf.py -B build/Debug -D WITH_DISPLAY=$with_display_cmake -D CMAKE_BUILD_TYPE=Debug -D SDKCONFIG=\"\$(pwd)/sdkconfig_debug\" -D \"SDKCONFIG_DEFAULTS=\$(pwd)/sdkconfig;\$(pwd)/sdkconfig.debug\" build
         "
         echo "=== ESP32-S3 build complete (Debug): esp/build/Debug/adsbee_esp.bin ==="
     else
         echo "=== Building ESP32-S3 firmware ==="
         docker compose run --rm esp-idf bash -c "
             cd /firmware/adsbee_1090/esp &&
-            idf.py -B build/Release build
+            idf.py -B build/Release -D WITH_DISPLAY=$with_display_cmake build
         "
         echo "=== ESP32-S3 build complete: esp/build/Release/adsbee_esp.bin ==="
     fi
@@ -139,6 +158,7 @@ build_pico() {
         cd /firmware/adsbee_1090/pico &&
         mkdir -p build/$build_type && cd build/$build_type &&
         cmake -DCMAKE_BUILD_TYPE=$build_type \
+              -DWITH_DISPLAY=$with_display_cmake \
               -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc \
               -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ ../.. &&
         cmake --build . --config $build_type --target all -j $jobs
@@ -165,6 +185,7 @@ build_test() {
         cd /firmware/adsbee_1090/pico &&
         mkdir -p build/Test && cd build/Test &&
         cmake -DCMAKE_BUILD_TYPE=Test \
+              -DWITH_DISPLAY=$with_display_cmake \
               -DCMAKE_C_COMPILER=/usr/bin/gcc \
               -DCMAKE_CXX_COMPILER=/usr/bin/g++ ../.. &&
         make -j $jobs &&
@@ -215,8 +236,9 @@ case "$target" in
         echo "  Output: firmware/pico/build/$build_type/application/combined.uf2"
         ;;
     *)
-        echo "Usage: $0 [-d] [esp|ti|pico|test|clean|all]"
-        echo "  -d    - Build in Debug mode instead of Release"
+        echo "Usage: $0 [-d] [-f] [--display] [esp|ti|pico|test|clean|all]"
+        echo "  -d        - Build in Debug mode instead of Release"
+        echo "  --display - Build the optional GC9A01 display support (OFF by default; or WITH_DISPLAY=1)"
         echo "  all   - Build all firmware targets (default)"
         echo "  esp   - Build ESP32-S3 firmware only"
         echo "  ti    - Build TI CC1312 firmware only"

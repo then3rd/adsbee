@@ -171,6 +171,7 @@ CPP_AT_CALLBACK(CommsManager::ATLEDEnableCallback) {
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
 
+#ifdef WITH_DISPLAY
 CPP_AT_CALLBACK(CommsManager::ATDisplayRangeCallback) {
     switch (op) {
         case '?':
@@ -221,6 +222,7 @@ CPP_AT_CALLBACK(CommsManager::ATDisplayRotationCallback) {
     }
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
+#endif  // WITH_DISPLAY
 
 CPP_AT_CALLBACK(CommsManager::ATSimulationCallback) {
     switch (op) {
@@ -1433,6 +1435,7 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .max_args = 5,  // TODO: check this value.
      .help_string = "AT+DEVICE_INFO?\r\n\tQuery device information.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDeviceInfoCallback, comms_manager)},
+#ifdef WITH_DISPLAY
     {.command = "DISPLAY_RANGE",
      .min_args = 0,
      .max_args = 1,
@@ -1445,6 +1448,7 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .help_string = "AT+DISPLAY_ROTATION=<0|90|180|270>\r\n\tRotate the radar display clockwise to match "
                     "physical mounting orientation.\r\n\tAT+DISPLAY_ROTATION?\r\n\tQuery the current rotation.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDisplayRotationCallback, comms_manager)},
+#endif  // WITH_DISPLAY
     {.command = "ETHERNET",
      .min_args = 0,
      .max_args = 1,

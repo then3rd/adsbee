@@ -22,6 +22,13 @@ find_package (Python3 REQUIRED COMPONENTS Interpreter)
 
 add_compile_options(-Wno-packed-bitfield-compat) # Ignore the packed bitfield compatibility warning from GCC 4.4, since we never used GCC that old.
 
+# Optional GC9A01 round display support. OFF by default; must stay in sync with esp/CMakeLists.txt.
+# On this processor WITH_DISPLAY gates only the display-specific AT commands (AT+DISPLAY_*) and
+# their settings-dump lines -- the shared Settings struct fields are intentionally NOT guarded,
+# so a mismatch vs. the ESP32 is cosmetic and can never desync the SPI-mirrored settings struct.
+# Enable with build.sh --display (or WITH_DISPLAY=1), which passes -D WITH_DISPLAY=ON here.
+option(WITH_DISPLAY "Build the optional GC9A01 round display support" OFF)
+
 # Function that converts a .bin file into a .S (assembly) file, allowing the .bin to be linked within a linker script
 # via its section name. Currently only used to create boot3.S in the bootloader folder.
 function(bin2asm BIN_FILE SECTION_NAME ASM_FILE)
@@ -57,6 +64,9 @@ if (ON_EMBEDDED_DEVICE)
     # Differentiate common code between Pico and ESP32. For code highlighting, add this to the "defines" property of
     # "configurations" in c_cpp_properties.json.
     add_compile_definitions(ON_PICO)
+    if(WITH_DISPLAY)
+        add_compile_definitions(WITH_DISPLAY)
+    endif()
     add_compile_definitions(
         # Can't pass in expression in parentheses or else it's a "functional" macro that isn't supported.
         PICO_FLASH_SIZE_BYTES=16777216 # 16MB = 16*1024*1024 Bytes of flash.
@@ -82,6 +92,9 @@ else()
 
     set(CMAKE_BUILD_TYPE "Debug") # Now that we've identified we're running tests, revert to an actual build config.
     add_compile_definitions(ON_HOST)
+    if(WITH_DISPLAY)
+        add_compile_definitions(WITH_DISPLAY)  # Off by default; enable host coverage with -D WITH_DISPLAY=ON.
+    endif()
     add_compile_options(
         -Wall                # Include all warnings.
         -Wno-format          # int != int32_t as far as the compiler is concerned because gcc has int32_t as long int

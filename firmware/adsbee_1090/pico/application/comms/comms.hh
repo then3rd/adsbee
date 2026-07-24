@@ -78,8 +78,10 @@ class CommsManager {
     CPP_AT_CALLBACK(ATBaudRateCallback);
     CPP_AT_CALLBACK(ATBiasTeeEnableCallback);
     CPP_AT_CALLBACK(ATDeviceInfoCallback);
+#ifdef WITH_DISPLAY
     CPP_AT_CALLBACK(ATDisplayRangeCallback);
     CPP_AT_CALLBACK(ATDisplayRotationCallback);
+#endif  // WITH_DISPLAY
     CPP_AT_CALLBACK(ATESP32EnableCallback);
     CPP_AT_CALLBACK(ATESP32FlashCallback);
     CPP_AT_CALLBACK(ATESP32RebootInfoCallback);
