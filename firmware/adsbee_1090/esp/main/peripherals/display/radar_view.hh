@@ -38,6 +38,28 @@ struct RadarTarget {
     uint32_t icao_address = 0;    // Identity used to key the position trail.
 };
 
+// A full radar color palette (RGB565). Selectable at runtime via RadarView::SetColorScheme(),
+// which is driven by settings.display_color_scheme (synced from the RP2040). The concrete presets
+// live in the kRadarThemes table in radar_view.cpp; the index order there matches the
+// DisplayColorScheme enum in SettingsManager::Settings.
+struct RadarTheme {
+    uint16_t background;    // Screen clear / label backing rects.
+    uint16_t grid;          // Range rings and crosshairs.
+    uint16_t label;         // Cardinal (N/E/S/W) labels.
+    uint16_t center;        // Receiver dot at the center.
+    uint16_t target;        // Aircraft heading triangle.
+    uint16_t target_tag;    // Callsign tag line.
+    uint16_t target_cat;    // Emitter-category tag line.
+    uint16_t target_alt;    // Altitude tag line.
+    uint16_t vector;        // Track/heading vector.
+    uint16_t rim_dot;       // Off-range bearing dots on the rim.
+    uint16_t runway;        // Runway lines (airport overlay).
+    uint16_t runway_label;  // Airport ident labels.
+    uint16_t acquiring;     // "Acquiring position" status text.
+    uint16_t range;         // Range/distance scale text.
+    uint16_t trail;         // Historical position trail.
+};
+
 class RadarView {
    public:
     static constexpr int16_t kScreenWidth = 240;
@@ -49,6 +71,15 @@ class RadarView {
 
     // Default display range (edge of the outermost ring), in kilometers.
     static constexpr float kDefaultRangeKm = 50.0f;
+
+    // Number of built-in color schemes in the kRadarThemes table (radar_view.cpp). Must match the
+    // DisplayColorScheme count in SettingsManager::Settings; a static_assert in display.cpp guards it.
+    static constexpr uint8_t kNumColorSchemes = 6;
+
+    /**
+     * Construct with the default (index 0) color scheme active.
+     */
+    RadarView();
 
     /**
      * Set the receiver position that the radar is centered on.
@@ -77,6 +108,13 @@ class RadarView {
             airports_dirty_ = true;
         }
     }
+
+    /**
+     * Select the active color scheme by index (see the kRadarThemes table in radar_view.cpp and
+     * the DisplayColorScheme enum in SettingsManager::Settings). Out-of-range values fall back to
+     * index 0. Cheap to call every frame -- it just swaps the active palette pointer.
+     */
+    void SetColorScheme(uint8_t scheme);
 
     /**
      * Enable/disable the runway + airport-ident overlay. On by default.
@@ -217,6 +255,7 @@ class RadarView {
     float cos_center_lat_ = 1.0f;  // cos(center_lat); cached by SetCenter for LatLonToScreen.
     float center_lon_deg_ = 0.0f;
     float range_km_ = kDefaultRangeKm;
+    const RadarTheme* theme_;  // Active color palette; set by the constructor and SetColorScheme().
     int16_t origin_y_ = 0;  // Subtracted from every drawn y (banded rendering); see SetOriginY.
     bool show_runways_ = true;
     bool airports_dirty_ = true;  // In-range airport table needs recompute (center/range moved).

@@ -13,7 +13,7 @@
 #include "pico/rand.h"
 #endif
 
-static constexpr uint32_t kSettingsVersion = 16;  // Change this when settings format changes!
+static constexpr uint32_t kSettingsVersion = 17;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 class SettingsManager {
@@ -224,6 +224,22 @@ class SettingsManager {
         // SPI.
         static constexpr uint16_t kDefaultDisplayRotationDeg = 0;
         uint16_t display_rotation_deg = kDefaultDisplayRotationDeg;
+
+        // Radar color scheme. Index into the kRadarThemes palette table consumed on the ESP32
+        // (RadarView::SetColorScheme) once the settings struct is synced over SPI. Keep this enum in
+        // lockstep with kRadarThemes in radar_view.cpp (a static_assert in display.cpp enforces the
+        // count).
+        enum DisplayColorScheme : uint8_t {
+            kDisplayColorSchemeDefault = 0,         // Original ADSBee palette (navy background).
+            kDisplayColorSchemeHighContrast = 1,    // Black + full-brightness primaries.
+            kDisplayColorSchemeNightRed = 2,        // Monochrome red on black (night vision).
+            kDisplayColorSchemeDaylight = 3,        // Light background, dark elements (sunlight).
+            kDisplayColorSchemeAmber = 4,           // Retro amber CRT radar-scope look.
+            kDisplayColorSchemeChromodynamics = 5,  // MagicStack Chromodynamics editor theme.
+            kNumDisplayColorSchemes                 // Sentinel: count of schemes.
+        };
+        static constexpr uint8_t kDefaultDisplayColorScheme = kDisplayColorSchemeDefault;
+        uint8_t display_color_scheme = kDefaultDisplayColorScheme;
 
         // Simulation / demo mode settings
         // When enabled, the ESP32 injects synthetic moving aircraft into its aircraft dictionary so

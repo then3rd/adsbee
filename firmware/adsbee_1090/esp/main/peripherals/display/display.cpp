@@ -22,6 +22,12 @@
 
 static const char* kTag = "Display";
 
+// The radar's palette table and the AT/settings color-scheme enum are defined independently (ESP32
+// vs. RP2040 side); keep their counts in lockstep so an out-of-range scheme can never index the
+// table. Update both when adding a scheme.
+static_assert(RadarView::kNumColorSchemes == SettingsManager::Settings::kNumDisplayColorSchemes,
+              "RadarView color scheme count must match SettingsManager DisplayColorScheme count.");
+
 Display display = Display();
 
 namespace {
@@ -249,6 +255,10 @@ void Display::Update() {
     // marks the airport cache dirty when the value actually changes, so applying it every frame is
     // cheap.
     radar_.SetRangeKm(settings_manager.settings.display_range_km);
+
+    // Pick up the latest color scheme (synced from the RP2040 over SPI). SetColorScheme() just
+    // swaps the active palette pointer, so applying it every frame is cheap.
+    radar_.SetColorScheme(settings_manager.settings.display_color_scheme);
 
     // Pick up the latest rotation setting (synced from the RP2040 over SPI).
     ApplyRotation();

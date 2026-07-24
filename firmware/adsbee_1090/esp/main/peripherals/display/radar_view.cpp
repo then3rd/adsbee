@@ -42,22 +42,132 @@ constexpr uint16_t Rgb565(uint8_t r, uint8_t g, uint8_t b) {
     return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
-// ---- Theme (RGB triples ported from ESP32-Plane-Radar include/ui/radar_theme.h) ----
-constexpr uint16_t kColorBackground = Rgb565(4, 10, 28);     // Deep navy.
-constexpr uint16_t kColorGrid = Rgb565(16, 100, 32);         // Dim green rings/crosshairs.
-constexpr uint16_t kColorLabel = Rgb565(255, 255, 255);      // White cardinal labels.
-constexpr uint16_t kColorCenter = Rgb565(255, 255, 255);     // White receiver dot.
-constexpr uint16_t kColorTarget = Rgb565(255, 0, 0);         // Red aircraft.
-constexpr uint16_t kColorTargetTag = Rgb565(255, 255, 255);  // White callsign tag.
-constexpr uint16_t kColorTargetCat = Rgb565(90, 200, 255);   // Cyan emitter-category tag.
-constexpr uint16_t kColorTargetAlt = Rgb565(255, 255, 0);    // Yellow altitude tag.
-constexpr uint16_t kColorVector = Rgb565(0, 255, 0);         // Green track vector.
-constexpr uint16_t kColorRimDot = Rgb565(255, 0, 0);         // Red off-range bearing dots.
-constexpr uint16_t kColorRunway = Rgb565(255, 0, 255);       // Magenta runway lines.
-constexpr uint16_t kColorRunwayLabel = Rgb565(110, 210, 230);  // Lighter teal airport idents.
-constexpr uint16_t kColorAcquiring = 0x8410;                 // Grey "acquiring" text.
-constexpr uint16_t kColorRange = Rgb565(60, 140, 255);       // Blue range/distance text.
-constexpr uint16_t kColorTrail = Rgb565(70, 70, 80);        // Dim, faint position trail.
+// ---- Color schemes ---------------------------------------------------------------------------
+// Each RadarTheme (see radar_view.hh) is a complete RGB565 palette. The active one is chosen at
+// runtime by RadarView::SetColorScheme(), fed from settings.display_color_scheme (synced from the
+// RP2040). Field order matches the RadarTheme struct; index order matches the DisplayColorScheme
+// enum in SettingsManager::Settings, so entry N here is the palette for scheme N there.
+//   0 Default        -- the original ADSBee radar palette (navy background, primary-colored data).
+//   1 High Contrast  -- pure black with full-brightness primaries; best in bright ambient light.
+//   2 Night (Red)    -- monochrome red on black to preserve dark-adapted night vision.
+//   3 Daylight       -- light background with dark elements for direct-sunlight legibility.
+//   4 Amber Phosphor -- retro amber CRT radar-scope look.
+//   5 Chromodynamics -- inspired by MagicStack's Chromodynamics editor theme
+//                       (github.com/MagicStack/Chromodynamics): near-black background with crimson,
+//                       cyan, lime, gold and purple syntax accents.
+constexpr RadarTheme kRadarThemes[] = {
+    // 0 -- Default: the original ADSBee radar palette.
+    {
+        Rgb565(4, 10, 28),      // background:   deep navy
+        Rgb565(16, 100, 32),    // grid:         dim green rings / crosshairs
+        Rgb565(255, 255, 255),  // label:        white cardinal (N/E/S/W) labels
+        Rgb565(255, 255, 255),  // center:       white receiver dot
+        Rgb565(255, 0, 0),      // target:       red aircraft
+        Rgb565(255, 255, 255),  // target_tag:   white callsign tag
+        Rgb565(90, 200, 255),   // target_cat:   cyan emitter-category tag
+        Rgb565(255, 255, 0),    // target_alt:   yellow altitude tag
+        Rgb565(0, 255, 0),      // vector:       green track vector
+        Rgb565(255, 0, 0),      // rim_dot:      red off-range bearing dots
+        Rgb565(255, 0, 255),    // runway:       magenta runway lines
+        Rgb565(110, 210, 230),  // runway_label: lighter teal airport idents
+        0x8410,                 // acquiring:    grey "acquiring" text
+        Rgb565(60, 140, 255),   // range:        blue range / distance text
+        Rgb565(70, 70, 80),     // trail:        dim, faint position trail
+    },
+    // 1 -- High Contrast: black background, full-brightness data for bright ambient light.
+    {
+        Rgb565(0, 0, 0),        // background:   black
+        Rgb565(0, 160, 0),      // grid:         bright green rings / crosshairs
+        Rgb565(255, 255, 255),  // label:        white cardinal labels
+        Rgb565(255, 255, 255),  // center:       white receiver dot
+        Rgb565(255, 0, 0),      // target:       pure red aircraft
+        Rgb565(255, 255, 255),  // target_tag:   white callsign tag
+        Rgb565(0, 255, 255),    // target_cat:   bright cyan category tag
+        Rgb565(255, 255, 0),    // target_alt:   bright yellow altitude tag
+        Rgb565(0, 255, 0),      // vector:       bright green track vector
+        Rgb565(255, 0, 0),      // rim_dot:      red off-range bearing dots
+        Rgb565(255, 0, 255),    // runway:       magenta runway lines
+        Rgb565(0, 255, 255),    // runway_label: bright cyan airport idents
+        Rgb565(200, 200, 200),  // acquiring:    light grey "acquiring" text
+        Rgb565(0, 180, 255),    // range:        bright blue range / distance text
+        Rgb565(120, 120, 130),  // trail:        light grey position trail
+    },
+    // 2 -- Night (Red): monochrome red on black to preserve night vision.
+    {
+        Rgb565(0, 0, 0),        // background:   black
+        Rgb565(60, 0, 0),       // grid:         very dim red rings / crosshairs
+        Rgb565(200, 40, 40),    // label:        red cardinal labels
+        Rgb565(255, 80, 80),    // center:       bright red receiver dot
+        Rgb565(255, 40, 40),    // target:       red aircraft
+        Rgb565(200, 40, 40),    // target_tag:   red callsign tag
+        Rgb565(150, 30, 30),    // target_cat:   dark red category tag
+        Rgb565(255, 90, 90),    // target_alt:   light red altitude tag
+        Rgb565(180, 0, 0),      // vector:       red track vector
+        Rgb565(255, 40, 40),    // rim_dot:      red off-range bearing dots
+        Rgb565(120, 0, 0),      // runway:       dark red runway lines
+        Rgb565(160, 30, 30),    // runway_label: red airport idents
+        Rgb565(120, 20, 20),    // acquiring:    dim red "acquiring" text
+        Rgb565(200, 50, 50),    // range:        red range / distance text
+        Rgb565(60, 10, 10),     // trail:        very dim red position trail
+    },
+    // 3 -- Daylight (Bright): light background, dark data for direct-sunlight legibility.
+    {
+        Rgb565(232, 236, 240),  // background:   light grey
+        Rgb565(90, 120, 170),   // grid:         blue-grey rings / crosshairs
+        Rgb565(16, 24, 32),     // label:        near-black cardinal labels
+        Rgb565(16, 24, 32),     // center:       near-black receiver dot
+        Rgb565(192, 0, 0),      // target:       dark red aircraft
+        Rgb565(16, 24, 32),     // target_tag:   near-black callsign tag
+        Rgb565(0, 90, 140),     // target_cat:   dark teal category tag
+        Rgb565(128, 90, 0),     // target_alt:   dark amber altitude tag
+        Rgb565(0, 100, 32),     // vector:       dark green track vector
+        Rgb565(192, 0, 0),      // rim_dot:      dark red off-range bearing dots
+        Rgb565(150, 0, 150),    // runway:       dark magenta runway lines
+        Rgb565(0, 90, 120),     // runway_label: dark teal airport idents
+        Rgb565(90, 100, 110),   // acquiring:    mid-grey "acquiring" text
+        Rgb565(30, 70, 150),    // range:        dark blue range / distance text
+        Rgb565(170, 175, 185),  // trail:        light grey trail (darker than background)
+    },
+    // 4 -- Amber Phosphor: retro amber CRT radar-scope look.
+    {
+        Rgb565(0, 0, 0),        // background:   black
+        Rgb565(74, 48, 0),      // grid:         dim amber rings / crosshairs
+        Rgb565(255, 176, 0),    // label:        amber cardinal labels
+        Rgb565(255, 200, 80),   // center:       light amber receiver dot
+        Rgb565(255, 176, 0),    // target:       amber aircraft
+        Rgb565(255, 176, 0),    // target_tag:   amber callsign tag
+        Rgb565(200, 130, 0),    // target_cat:   dim amber category tag
+        Rgb565(255, 208, 96),   // target_alt:   light amber altitude tag
+        Rgb565(255, 128, 0),    // vector:       orange track vector
+        Rgb565(255, 176, 0),    // rim_dot:      amber off-range bearing dots
+        Rgb565(160, 90, 0),     // runway:       dark amber runway lines
+        Rgb565(220, 150, 40),   // runway_label: light amber airport idents
+        Rgb565(150, 100, 0),    // acquiring:    dim amber "acquiring" text
+        Rgb565(255, 150, 0),    // range:        orange range / distance text
+        Rgb565(80, 50, 0),      // trail:        very dim amber position trail
+    },
+    // 5 -- Chromodynamics: MagicStack Chromodynamics editor theme mapped onto the radar. Comments
+    //      note the source syntax scope / hex each color is drawn from.
+    {
+        Rgb565(6, 6, 6),        // background:   near-black (editor bg #060606)
+        Rgb565(89, 89, 89),     // grid:         dim grey rings (gutter fg #595959)
+        Rgb565(198, 198, 198),  // label:        light grey labels (foreground #c6c6c6)
+        Rgb565(223, 223, 223),  // center:       near-white receiver dot (caret #dfdfdf)
+        Rgb565(232, 54, 79),    // target:       crimson aircraft (keyword #e8364f)
+        Rgb565(198, 198, 198),  // target_tag:   light grey callsign (foreground #c6c6c6)
+        Rgb565(102, 217, 239),  // target_cat:   cyan category (storage type #66d9ef)
+        Rgb565(211, 201, 112),  // target_alt:   gold altitude (string #d3c970)
+        Rgb565(166, 226, 46),   // vector:       lime green vector (function/class #a6e22e)
+        Rgb565(232, 54, 79),    // rim_dot:      crimson off-range dots (keyword #e8364f)
+        Rgb565(211, 60, 120),   // runway:       pink runway lines (tag localname #d33c78)
+        Rgb565(233, 156, 66),   // runway_label: orange airport idents (function arg #e99c42)
+        Rgb565(116, 116, 117),  // acquiring:    grey "acquiring" text (comment #747475)
+        Rgb565(154, 121, 215),  // range:        purple range / distance text (number #9a79d7)
+        Rgb565(74, 74, 80),     // trail:        faint grey position trail
+    },
+};
+static_assert(sizeof(kRadarThemes) / sizeof(kRadarThemes[0]) == RadarView::kNumColorSchemes,
+              "kRadarThemes must have exactly RadarView::kNumColorSchemes entries.");
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kDegToRad = kPi / 180.0f;
@@ -232,6 +342,15 @@ void ClipPointOntoRing(int& x, int& y) {
 }
 }  // namespace
 
+RadarView::RadarView() : theme_(&kRadarThemes[0]) {}
+
+void RadarView::SetColorScheme(uint8_t scheme) {
+    if (scheme >= kNumColorSchemes) {
+        scheme = 0;
+    }
+    theme_ = &kRadarThemes[scheme];
+}
+
 void RadarView::LatLonToScreen(float latitude_deg, float longitude_deg, float& out_x, float& out_y,
                                float& out_range_km) const {
     // Equirectangular (flat-earth) projection, north-up. The cos(center_lat) term corrects the
@@ -249,30 +368,31 @@ void RadarView::LatLonToScreen(float latitude_deg, float longitude_deg, float& o
 }
 
 void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
+    const RadarTheme& pal = *theme_;  // Active color palette (see SetColorScheme).
     // origin_y_ shifts every y so a single horizontal strip of the scene can be drawn into a
     // small sprite (banded rendering); it is 0 for full-frame / direct draw. fillScreen clears
     // only the target (the strip), so the union of strips reproduces the whole cleared frame.
     const int16_t oy = origin_y_;
-    gfx->fillScreen(kColorBackground);
+    gfx->fillScreen(pal.background);
 
     // Concentric range rings, evenly spaced out to the outer ring.
     for (int i = 1; i <= kRingCount; i++) {
-        gfx->drawCircle(kCenterX, kCenterY - oy, (kRadiusPx * i) / kRingCount, kColorGrid);
+        gfx->drawCircle(kCenterX, kCenterY - oy, (kRadiusPx * i) / kRingCount, pal.grid);
     }
 
     // Crosshairs.
-    gfx->drawFastVLine(kCenterX, kCenterY - kRadiusPx - oy, kRadiusPx * 2, kColorGrid);
-    gfx->drawFastHLine(kCenterX - kRadiusPx, kCenterY - oy, kRadiusPx * 2, kColorGrid);
+    gfx->drawFastVLine(kCenterX, kCenterY - kRadiusPx - oy, kRadiusPx * 2, pal.grid);
+    gfx->drawFastHLine(kCenterX - kRadiusPx, kCenterY - oy, kRadiusPx * 2, pal.grid);
 
     // White receiver dot at the center.
     if (position_valid) {
-        gfx->fillSmoothCircle(kCenterX, kCenterY - oy, kCenterDotRadiusPx, kColorCenter);
+        gfx->fillSmoothCircle(kCenterX, kCenterY - oy, kCenterDotRadiusPx, pal.center);
     }
 
     // Cardinal labels, enlarged and pushed all the way out onto the outer ring. Each is centered
     // on the ring line, with a background-filled pad breaking the ring behind it (like the range
     // label). Drawn after the rings so the pad erases the grid underneath.
-    gfx->setTextColor(kColorLabel);
+    gfx->setTextColor(pal.label);
     gfx->setTextDatum(lgfx::textdatum_t::middle_center);
     gfx->setTextSize(1.5f);
     struct Cardinal {
@@ -287,7 +407,7 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
     for (const Cardinal& c : cardinals) {
         const int16_t cw = gfx->textWidth(c.s);
         const int16_t ch = gfx->fontHeight();
-        gfx->fillRect(c.x - cw / 2 - 2, c.y - ch / 2 - 1 - oy, cw + 4, ch + 2, kColorBackground);
+        gfx->fillRect(c.x - cw / 2 - 2, c.y - ch / 2 - 1 - oy, cw + 4, ch + 2, pal.background);
         gfx->drawString(c.s, c.x, c.y - oy);
     }
     gfx->setTextSize(1);
@@ -299,7 +419,7 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
     // the crosshairs and clear of the cardinal labels.
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::middle_center);
-    gfx->setTextColor(kColorRange);
+    gfx->setTextColor(pal.range);
     // Unit vector along the NE diagonal (+x right, -y up): cos/sin of 45 degrees.
     constexpr float kDiag = 0.70710678f;
     for (int i = 1; i <= kRingCount; i++) {
@@ -311,12 +431,12 @@ void RadarView::DrawBackground(lgfx::LGFXBase* gfx, bool position_valid) {
         const int16_t ly = kCenterY - static_cast<int16_t>(ring_radius * kDiag);
         const int16_t tw = gfx->textWidth(scale_buf);
         const int16_t th = gfx->fontHeight();
-        gfx->fillRect(lx - tw / 2 - 2, ly - th / 2 - 1 - oy, tw + 4, th + 2, kColorBackground);
+        gfx->fillRect(lx - tw / 2 - 2, ly - th / 2 - 1 - oy, tw + 4, th + 2, pal.background);
         gfx->drawString(scale_buf, lx, ly - oy);
     }
 
     if (!position_valid) {
-        gfx->setTextColor(kColorAcquiring);
+        gfx->setTextColor(pal.acquiring);
         gfx->setTextDatum(lgfx::textdatum_t::middle_center);
         gfx->drawString("acquiring", kCenterX, kCenterY - 6 - oy);
         gfx->drawString("position", kCenterX, kCenterY + 6 - oy);
@@ -533,6 +653,7 @@ void RadarView::LayoutTags(const RadarTarget* targets, int count) {
 }
 
 void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
+    const RadarTheme& pal = *theme_;  // Active color palette (see SetColorScheme).
     // Geometry below is computed in absolute scene coordinates; oy is applied only at the final
     // draw calls so banded rendering (see SetOriginY) lands each strip correctly.
     const int16_t oy = origin_y_;
@@ -563,7 +684,7 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
             int32_t dx = cx - kCenterX, dy = cy - kCenterY;
             bool inside = (dx * dx + dy * dy) <= kRadiusSq;
             if (have_prev && inside) {
-                gfx->drawLine(prev_x, prev_y - oy, cx, cy - oy, kColorTrail);
+                gfx->drawLine(prev_x, prev_y - oy, cx, cy - oy, pal.trail);
             }
             prev_x = cx;
             prev_y = cy;
@@ -576,7 +697,7 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
         float bearing_rad = atan2f(sx - kCenterX, kCenterY - sy);  // 0 = north, clockwise.
         int16_t dot_x = kCenterX + static_cast<int16_t>(sinf(bearing_rad) * kRadiusPx);
         int16_t dot_y = kCenterY - static_cast<int16_t>(cosf(bearing_rad) * kRadiusPx);
-        gfx->fillSmoothCircle(dot_x, dot_y - oy, 2, kColorRimDot);
+        gfx->fillSmoothCircle(dot_x, dot_y - oy, 2, pal.rim_dot);
         return;
     }
 
@@ -601,7 +722,7 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
 
         gfx->fillTriangle(static_cast<int16_t>(tipx), static_cast<int16_t>(tipy - oy),
                           static_cast<int16_t>(baseLx), static_cast<int16_t>(baseLy - oy),
-                          static_cast<int16_t>(baseRx), static_cast<int16_t>(baseRy - oy), kColorTarget);
+                          static_cast<int16_t>(baseRx), static_cast<int16_t>(baseRy - oy), pal.target);
 
         // Speed vector. A crisp 1px line (not a wide line) so it stays centered on the heading
         // axis the triangle is built on, rather than rounding off to one side.
@@ -610,11 +731,11 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
             if (len > kVectorMaxPx) len = kVectorMaxPx;
             gfx->drawLine(static_cast<int16_t>(sx), static_cast<int16_t>(sy - oy),
                           static_cast<int16_t>(sx + fx * len), static_cast<int16_t>(sy + fy * len - oy),
-                          kColorVector);
+                          pal.vector);
         }
     } else {
         // Unknown heading: plain dot.
-        gfx->fillSmoothCircle(ix, iy - oy, 3, kColorTarget);
+        gfx->fillSmoothCircle(ix, iy - oy, 3, pal.target);
     }
 
     // Stacked tag orbiting the target: callsign (white), then emitter category (cyan) and altitude
@@ -636,17 +757,17 @@ void RadarView::DrawTarget(lgfx::LGFXBase* gfx, const RadarTarget& target) {
 
     // Line 1: callsign, or "?" when none is known.
     const char* cs = (target.callsign[0] != '\0' && target.callsign[0] != '?') ? target.callsign : "?";
-    lines[n_lines++] = {cs, kColorTargetTag};  // White callsign.
+    lines[n_lines++] = {cs, pal.target_tag};  // White callsign.
 
     // Line 2: emitter category abbreviation (only when known).
     if (target.category[0] != '\0') {
-        lines[n_lines++] = {target.category, kColorTargetCat};  // Cyan category.
+        lines[n_lines++] = {target.category, pal.target_cat};  // Cyan category.
     }
 
     // Line 3: geometric (GNSS) altitude in feet (only when valid, to avoid a false "0ft").
     if (target.geom_altitude_valid) {
         snprintf(alt_buf, sizeof(alt_buf), "%dft", static_cast<int>(target.geom_altitude_ft));
-        lines[n_lines++] = {alt_buf, kColorTargetAlt};  // Yellow altitude.
+        lines[n_lines++] = {alt_buf, pal.target_alt};  // Yellow altitude.
     }
 
     int16_t block_w = 0;
@@ -708,6 +829,7 @@ void RadarView::RefreshVisibleAirports() {
 }
 
 void RadarView::DrawAirports(lgfx::LGFXBase* gfx) {
+    const RadarTheme& pal = *theme_;  // Active color palette (see SetColorScheme).
     if (!show_runways_) return;
     if (airports_dirty_) RefreshVisibleAirports();
 
@@ -733,14 +855,14 @@ void RadarView::DrawAirports(lgfx::LGFXBase* gfx) {
             ClipEndpointToRing(x0, y0, x1, y1);
             ClipEndpointToRing(x1, y1, x0, y0);
 
-            gfx->drawWideLine(x0, y0 - oy, x1, y1 - oy, kRunwayLineHalfWidth, kColorRunway);
+            gfx->drawWideLine(x0, y0 - oy, x1, y1 - oy, kRunwayLineHalfWidth, pal.runway);
         }
         base += ds.airport_count;
     }
 
     // Airport idents, one per in-range airport, anchored on (or clipped onto) the outer ring and
     // nudged outward by a small gap so the text clears the runway lines.
-    gfx->setTextColor(kColorRunwayLabel);
+    gfx->setTextColor(pal.runway_label);
     gfx->setTextSize(1);
     gfx->setTextDatum(lgfx::textdatum_t::bottom_center);
     base = 0;

@@ -33,6 +33,8 @@ void SettingsManager::Print() {
                               "\tDisplay Range: %d km\r\n", static_cast<int>(settings.display_range_km + 0.5f));
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
                               "\tDisplay Rotation: %u deg\r\n", settings.display_rotation_deg);
+    print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
+                              "\tDisplay Color Scheme: %u\r\n", settings.display_color_scheme);
 #endif  // WITH_DISPLAY
     CONSOLE_PRINTF("%s", print_buf);
     print_buf_len = 0;
@@ -145,6 +147,9 @@ void SettingsManager::PrintAT() {
 
     // AT+DISPLAY_ROTATION
     CONSOLE_PRINTF("AT+DISPLAY_ROTATION=%u\r\n", settings.display_rotation_deg);
+
+    // AT+DISPLAY_SCHEME
+    CONSOLE_PRINTF("AT+DISPLAY_SCHEME=%u\r\n", settings.display_color_scheme);
 #endif  // WITH_DISPLAY
 
     // AT+ESP32_ENABLE

@@ -222,6 +222,30 @@ CPP_AT_CALLBACK(CommsManager::ATDisplayRotationCallback) {
     }
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
+
+CPP_AT_CALLBACK(CommsManager::ATDisplayColorSchemeCallback) {
+    switch (op) {
+        case '?':
+            CPP_AT_CMD_PRINTF("=%u", settings_manager.settings.display_color_scheme);
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        case '=':
+            if (CPP_AT_HAS_ARG(0)) {
+                uint16_t scheme;
+                CPP_AT_TRY_ARG2NUM(0, scheme);
+                if (scheme >= SettingsManager::Settings::kNumDisplayColorSchemes) {
+                    CPP_AT_ERROR("Display color scheme must be 0-%u.",
+                                 SettingsManager::Settings::kNumDisplayColorSchemes - 1);
+                }
+                settings_manager.settings.display_color_scheme = static_cast<uint8_t>(scheme);
+                // Push the new scheme to the ESP32 so the display picks it up.
+                settings_manager.SyncToCoprocessors();
+                CPP_AT_SUCCESS();
+            }
+            break;
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
 #endif  // WITH_DISPLAY
 
 CPP_AT_CALLBACK(CommsManager::ATSimulationCallback) {
@@ -1448,6 +1472,13 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .help_string = "AT+DISPLAY_ROTATION=<0|90|180|270>\r\n\tRotate the radar display clockwise to match "
                     "physical mounting orientation.\r\n\tAT+DISPLAY_ROTATION?\r\n\tQuery the current rotation.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDisplayRotationCallback, comms_manager)},
+    {.command = "DISPLAY_SCHEME",
+     .min_args = 0,
+     .max_args = 1,
+     .help_string = "AT+DISPLAY_SCHEME=<0-5>\r\n\tSet the radar color scheme: 0=Default, 1=High Contrast, "
+                    "2=Night (red), 3=Daylight, 4=Amber, 5=Chromodynamics.\r\n\tAT+DISPLAY_SCHEME?\r\n\tQuery "
+                    "the current scheme.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATDisplayColorSchemeCallback, comms_manager)},
 #endif  // WITH_DISPLAY
     {.command = "ETHERNET",
      .min_args = 0,

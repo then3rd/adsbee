@@ -81,6 +81,7 @@ class CommsManager {
 #ifdef WITH_DISPLAY
     CPP_AT_CALLBACK(ATDisplayRangeCallback);
     CPP_AT_CALLBACK(ATDisplayRotationCallback);
+    CPP_AT_CALLBACK(ATDisplayColorSchemeCallback);
 #endif  // WITH_DISPLAY
     CPP_AT_CALLBACK(ATESP32EnableCallback);
     CPP_AT_CALLBACK(ATESP32FlashCallback);
